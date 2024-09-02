@@ -21,28 +21,24 @@ class g_pushover():
         self.input_dim = 4
         self.output_dim = 1
 
-        self.marginals = {'x1': [14938.0, 14938.0*0.1, 'normal'], # Mybeam_mean = 10938.0   # yield moment at plastic hinge location (i.e., My of RBS section, if used)
-                          'x2': [23350, 23350*0.1, 'normal'],  # yield moment of colum section
-                          'x3': [38.5, 38.5 *0.1, 'normal'],   # cross-sectional area column section W24x131 for Story 1 & 2 (elasticBeamColumn: 111, 121, 112, 122)
-                          'x4': [25.0, 25.0 *0.1, 'normal']}   # external load at node 12
+        self.marginals = {'x1': [14938.0, 14938.0 * 0.1, 'normal'], # Mybeam_mean = 10938.0   # yield moment at plastic hinge location (i.e., My of RBS section, if used)
+                          'x2': [23350.0, 23350.0 * 0.1, 'normal'],  # yield moment of colum section
+                          'x3': [38.5, 38.5 * 0.1, 'normal'],   # cross-sectional area column section W24x131 for Story 1 & 2 (elasticBeamColumn: 111, 121, 112, 122)
+                          'x4': [35.0, 35.0 * 0.25, 'normal']}   # external load at node 12
                           
         '''mean(or min), std(or max), marginal_distrib'''
 
     def eval_lstate(self, x):
-        x = np.array(x, dtype='f')
 
         # Ref. Lateral loads
         lat2 = 16.255
         lat3 = 31.636
         ratio_ref = lat3/lat2
 
-        print(x[:-1])
-
         _ , _, max_baseshear_mc = PushoverConcetrated_mod(x[:-1])
 
-        ext_load = 2*x[:-1] * (1+ratio_ref)
+        ext_load = 2*x[-1] * (1+ratio_ref)
         g_pushover = max_baseshear_mc - ext_load
-
         return g_pushover
     
     def monte_carlo_estimate(self, n_samples):
