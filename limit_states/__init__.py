@@ -4,6 +4,6 @@ from .g_fem_pushover import g_pushover
 
 REGISTRY = {}
 
-REGISTRY["g2d_four_branch"] = g2D_four_branch
-REGISTRY["g2d_himmelblau"] = g2d_himmelblau
-REGISTRY["g4d_pushover_frame"] = g_pushover
+REGISTRY["four_branch"] = g2D_four_branch
+REGISTRY["himmelblau"] = g2d_himmelblau
+REGISTRY["pushover_frame"] = g_pushover

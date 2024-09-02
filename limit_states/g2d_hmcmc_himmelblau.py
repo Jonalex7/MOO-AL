@@ -35,11 +35,13 @@ class g2d_himmelblau():
         B_ref = - norm.ppf(Pf_ref)
         return Pf_ref, B_ref, x_mc_scaled, y_mc
 
-    def get_doe_points(self, n_samples=10, method='lhs'):
+    def get_doe(self, n_samples=10, method='lhs', random_state=None):
         n_passive = int(n_samples)
+        if random_state is None:
+            random_state = np.random.RandomState()
 
         if method == 'lhs':
-            sampler = qmc.LatinHypercube(d=self.input_dim)
+            sampler = qmc.LatinHypercube(d=self.input_dim, seed=random_state)
             x_norm = sampler.random(n=n_passive)
             x_scaled = isoprob_transform(x_norm, self.marginals)
             y_scaled = self.eval_lstate(x_scaled)

@@ -35,37 +35,37 @@ class g_pushover():
         lat3 = 31.636
         ratio_ref = lat3/lat2
 
-        _ , _, max_baseshear_mc = PushoverConcetrated_mod(x[:-1])
+        n_samples = len(x)
 
-        ext_load = 2*x[-1] * (1+ratio_ref)
-        g_pushover = max_baseshear_mc - ext_load
+        max_baseshear_mc = np.zeros((n_samples))
+        g_pushover = np.zeros_like(max_baseshear_mc)
+
+        for i in range(int(n_samples)):
+            _ , _, max_baseshear_mc[i] = PushoverConcetrated_mod(x[i][:-1])
+
+            ext_load = 2*x[i][-1] * (1+ratio_ref)
+            g_pushover[i] = max_baseshear_mc[i] - ext_load
+
         return g_pushover
     
     def monte_carlo_estimate(self, n_samples):
         n_mcs = int(n_samples)
-        max_baseshear_mc = np.zeros((int(n_samples)))
-
         x_mc_norm = np.random.uniform(0, 1, size=(int(n_mcs), self.input_dim))
-
         x_mc_scaled = isoprob_transform(x_mc_norm, self.marginals)
-
-        for i in range(int(n_samples)):
-            max_baseshear_mc[i] = self.eval_lstate(x_mc_scaled[i])
-
-        Pf_ref = np.sum(max_baseshear_mc < 0) / n_mcs
+        y_mc = self.eval_lstate(x_mc_scaled)
+        Pf_ref = np.sum(y_mc < 0) / n_mcs
         B_ref = - norm.ppf(Pf_ref)
-        return Pf_ref, B_ref, x_mc_scaled, max_baseshear_mc
+        return Pf_ref, B_ref, x_mc_scaled, y_mc
     
-    def get_doe_points(self, n_samples=10, method='lhs'):
+    def get_doe(self, n_samples=10, method='lhs', random_state=None):
         n_passive = int(n_samples)
-        y_scaled = np.zeros((int(n_samples)))
+        if random_state is None:
+            random_state = np.random.RandomState()
 
-        sampler = qmc.LatinHypercube(d=self.input_dim)
+        sampler = qmc.LatinHypercube(d=self.input_dim, seed=random_state)
         x_norm = sampler.random(n=n_passive)
         x_scaled = isoprob_transform(x_norm, self.marginals)
-
-        for i in range(int(n_samples)):
-            y_scaled[i] = self.eval_lstate(x_scaled[i])
+        y_scaled = self.eval_lstate(x_scaled)
 
         return x_norm, x_scaled, y_scaled
     
