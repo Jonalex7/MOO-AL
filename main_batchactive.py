@@ -92,5 +92,5 @@ while len(x_train_norm) < budget+args.acq_b:
     # Update the training set
     x_train_norm = np.vstack([x_train_norm, selected_samples_norm])
     y_train = np.concatenate([y_train, selected_outputs])
-    
-print("Active learning completed.")
+
+print("Active learning completed")
