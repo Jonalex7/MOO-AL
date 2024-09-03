@@ -19,7 +19,7 @@ parser = argparse.ArgumentParser(description='GP Regressor trained with batch ac
 parser.add_argument('--ls', type=str, nargs='?', action='store', default='four_branch',
                     help='Specify target LS: four_branch, himmelblau, pushover_frame. Def: four_branch')
 
-parser.add_argument('--acq_f', type=str, nargs='?', action='store', default='correlation',
+parser.add_argument('--acq_f', type=str, nargs='?', action='store', default='u_function',
                     help='Specify the acquisition function: correlation, u_function. Def: correlation')
 
 parser.add_argument('--acq_b', type=int, nargs='?', action='store', default=3,
@@ -38,7 +38,7 @@ lstate = ls_REGISTRY[args.ls]()
 # Loading experiment setting 
 doe =  10     # initial DoE with LHS
 budget = 100  # max number of samples
-n_mcs = 1e6  # n_MonteCarlo samples for pool
+n_mcs = 1e4  # n_MonteCarlo pool of samples 
 
 #results directory
 date_time_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -64,14 +64,16 @@ print(f'Target LS: {args.ls}, experiment seed: {seed_exp}')
 # Design of experiments
 x_train_norm, x_train, y_train = lstate.get_doe(n_samples=doe, method='lhs', random_state=random_state)
 
-active_learning = BatchActiveLearning(b_samples=args.acq_b)
+# print(y_train)
+active_learning = BatchActiveLearning()
 
 # for it in range(iterations):
 while len(x_train_norm) < budget+args.acq_b:
     
     print(f'Training size: {len(x_train_norm)} ')
     # Train the Gaussian Process model
-    kernel = 1.0 * Matern(length_scale=1.0, length_scale_bounds=(1e-07, 100000.0), nu=1.5)
+    kernel = 1.0 * Matern(length_scale=1.0, length_scale_bounds=(1e-3, 100000.0), nu=1.5)
+    # kernel = 1.0 * Matern(length_scale=1.0, nu=1.5)
     gaussian_process = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=9)
     gaussian_process.fit(x_train_norm, y_train)
 
@@ -85,12 +87,22 @@ while len(x_train_norm) < budget+args.acq_b:
     pf_evol.append(Pf_model)
 
     #Selection of batch of samples from MC pool
-    selected_samples_norm = active_learning.get_u_function(x_mc_norm, mean_prediction, std_prediction)
+    if args.acq_f == 'u_function':
+        selected_indices = active_learning.get_u_function(mean_prediction, std_prediction, args.acq_b)
+
+    elif args.acq_f == 'correlation':
+        selected_indices = active_learning.get_correlation(x_mc_norm, gaussian_process, mean_prediction, std_prediction, args.acq_b)
+
+    # print(selected_indices)
+
+    selected_samples_norm = x_mc_norm[selected_indices]
     selected_samples = isoprob_transform(selected_samples_norm, lstate.marginals)
     selected_outputs = lstate.eval_lstate(selected_samples)
 
     # Update the training set
     x_train_norm = np.vstack([x_train_norm, selected_samples_norm])
     y_train = np.concatenate([y_train, selected_outputs])
+
+    # print(y_train)
 
 print("Active learning completed")
