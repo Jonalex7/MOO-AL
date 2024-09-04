@@ -20,6 +20,7 @@ class g_pushover():
     def __init__(self):
         self.input_dim = 4
         self.output_dim = 1
+        self.target = 0.00117 # ref with MCS = 1e6
 
         self.marginals = {'x1': [14938.0, 14938.0 * 0.1, 'normal'], # Mybeam_mean = 10938.0   # yield moment at plastic hinge location (i.e., My of RBS section, if used)
                           'x2': [23350.0, 23350.0 * 0.1, 'normal'],  # yield moment of colum section

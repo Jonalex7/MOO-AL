@@ -1,5 +1,4 @@
-numpy==2.0.2
+numpy==1.25.2
+torch==2.4.0
 scikit-learn==1.5.1
-matplotlib==3.9.2
 openseespy==3.4.0.8
-scipy==1.13.1

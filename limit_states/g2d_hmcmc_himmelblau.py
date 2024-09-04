@@ -14,6 +14,8 @@ class g2d_himmelblau():
     def __init__(self):
         self.input_dim = 2
         self.output_dim = 1
+        self.target = 0.0001674 # ref with MCS = 1e7
+
         self.marginals = {'x1': [0, 1.0, 'normal'],
                           'x2': [0, 1.0, 'normal']}
         '''mean(or min), std(or max), marginal_distrib'''
