@@ -1,5 +1,6 @@
 # Results
 results/
+.pkl
 
 # Jupyter Notebook
 .ipynb_checkpoints
