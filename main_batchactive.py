@@ -6,8 +6,9 @@ import os
 import argparse
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
+from scipy.stats import norm
 
-# import wandb
+import wandb
 import time
 
 from limit_states import REGISTRY as ls_REGISTRY
@@ -21,10 +22,10 @@ parser = argparse.ArgumentParser(description='GP Regressor trained with batch ac
 parser.add_argument('--ls', type=str, nargs='?', action='store', default='four_branch',
                     help='Specify target LS: four_branch, himmelblau, pushover_frame. Def: four_branch')
 
-parser.add_argument('--acq_f', type=str, nargs='?', action='store', default='u_function',
+parser.add_argument('--al_f', type=str, nargs='?', action='store', default='u_function',
                     help='Specify the acquisition function: correlation_det, correlation_eigen, u_function, random. Def: u_function')
 
-parser.add_argument('--acq_b', type=int, nargs='?', action='store', default=3,
+parser.add_argument('--al_b', type=int, nargs='?', action='store', default=3,
                     help='Specify the batch sample size per iteration. Def: 3.')
 
 parser.add_argument('--seed', type=int, nargs='?', action='store', default=None,
@@ -38,24 +39,30 @@ args = parser.parse_args()
 #-----------------------------------------------------------------------------------------------
 # Loading limit state
 lstate = ls_REGISTRY[args.ls]()
-
 #-----------------------------------------------------------------------------------------------
 # Loading experiment setting 
 config={}
 doe = config['doe'] = 10     # initial DoE with LHS
-budget = config['budget'] = 100  # max number of samples
-n_mcs_pool = config['n_mcs_pool'] = 1e5  # n_MonteCarlo pool of samples for learning
+budget = config['budget'] = 200  # max number of samples
+n_mcs_pool = config['n_mcs_pool'] = 1e6  # n_MonteCarlo pool of samples for learning
 n_mcs_pf = config['n_mcs_pf']  = 1e6  # n_MonteCarlo pool of samples for pf estimation
-iterations = int((budget-doe)/args.acq_b) + 1 #iteration to complete the available budget-doe
+al_strategy = config['al_strategy'] = args.al_f
+al_batch = config['al_batch'] = args.al_b
+casestudy = config['case_study'] = args.ls
+iterations = int((budget-doe)/args.al_b) #iteration to complete the available budget-doe
+
+Pf_ref = lstate.target
+B_ref = - norm.ppf(Pf_ref)
+b_j = 0
 
 #results directory
 date_time_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-results_dir = f'results/{args.ls}/{args.acq_f}/{args.acq_b}/'
+results_dir = f'results/{casestudy}/{al_strategy}/{al_batch}/'
 
 if not os.path.exists(results_dir):
     os.makedirs(results_dir)
 
-print(f'Target LS: {args.ls}')
+print(f'Target LS: {casestudy}, AL_Strategy: {al_strategy}')
 
 for exp in range(args.n_exp):
     #results
@@ -74,7 +81,12 @@ for exp in range(args.n_exp):
 
     print(f'Experiment: {exp+1}/{args.n_exp}, Seed: {seed_exp}')
     config['seed'] = seed_exp
-    results_file['config'] = config  
+    results_file['config'] = config
+    #-----------------------------------------------------------------------------------------------
+    # log to wanb
+    wandb.init(project='Batch_AL',
+    name=f'{casestudy}_{al_strategy}_{al_batch}',
+    config=config)
     #-----------------------------------------------------------------------------------------------
     # Design of experiments
     x_train_norm, _ , y_train = lstate.get_doe(n_samples=doe, method='lhs', random_state=random_state)
@@ -82,44 +94,67 @@ for exp in range(args.n_exp):
     y_train = torch.tensor(y_train)
 
     # Loading active learning methods
-    active_learning = BatchActiveLearning(n_active_samples= args.acq_b)
+    active_learning = BatchActiveLearning(n_active_samples= args.al_b)
 
     start_time = time.time()
 
-    for it in range(iterations):
+    for it in range(iterations + 1):
         # Find the minimum and maximum distance between training samples
         # min_distance, _ = min_max_distance(x_train_norm, x_train_norm)
-        # kernel = 1.0 * Matern(length_scale=1.0, length_scale_bounds=(min_distance, 1000000), nu=1.5)
+        kernel = 1.0 * Matern(length_scale=1.0, length_scale_bounds=(1e-6, 10), nu=1.5)
         
         print(f'Training size: {len(x_train_norm)} samples', end=" ")
+        wandb.log({"train_size": len(x_train_norm)}, step=it)
         # Train the Gaussian Process model
-        kernel = 1.0 * Matern(length_scale=1.0, nu=1.5)
+        # kernel = 1.0 * Matern(length_scale=1.0, nu=1.5)
         model_gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=9)
         model_gp.fit(x_train_norm, y_train)
+        # print('kernel: ', model_gp.kernel)
 
         # Pf estimation with MCs
         x_mcs_pf = np.random.uniform(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
         mean_pf = model_gp.predict(x_mcs_pf, return_std=False)
         Pf_model = np.sum(mean_pf < 0) / len(mean_pf)
-        print(f'Pf ref: {lstate.target:.3E}, Pf model: {Pf_model.item():.3E} \n')
         pf_evol.append(Pf_model)
 
+        # reliability index 
+        B_model = - norm.ppf(Pf_model)
+        B_rel_diff = (B_model-B_ref)/B_ref
+        
+        # check beta stability
+        b_stab = np.abs(B_model - b_j) / B_model   #should be less than 0.005
+        print(f'Pf_ref: {Pf_ref:.3E}, Pf_model: {Pf_model.item():.3E}, B_rel_diff: {B_rel_diff.item():.1%}, B_stab: {b_stab:.1%} \n')
+        wandb.log({"pf_ref":Pf_ref, "pf_model": Pf_model, "b_rel": B_rel_diff, "b_stab": b_stab}, step=it)
+
+        # Check if b_stab is smaller than 0.005
+        if b_stab < 0.005:
+            counter += 1
+        else:
+            counter = 0  # Reset counter if condition not met
+
+        # Print 'stop' if b_stab is small for 3 consecutive iterations
+        if counter >= 3:
+            print(f'Stop at {len(x_train_norm)} samples!')
+            wandb.log({"Stop": len(x_train_norm)})
+
+        b_j = B_model
+        
         # Making predictions of mean and std for mc population 
         x_mc_pool = np.random.uniform(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
         mean_prediction, std_prediction = model_gp.predict(x_mc_pool, return_std=True)
         mean_pred = torch.tensor(mean_prediction)
         std_pred = torch.tensor(std_prediction)
             
-        if args.acq_f == 'u_function':
+        if al_strategy == 'u_function':
             selected_indices = active_learning.get_u_function(mean_pred, std_pred)
 
-        elif args.acq_f == 'correlation_det':
+        elif al_strategy == 'correlation_det':
             selected_indices = active_learning.get_correlation_det(x_mc_pool, model_gp, mean_pred, std_pred)
 
-        elif args.acq_f == 'correlation_eigen':
+        elif al_strategy == 'correlation_eigen':
             selected_indices = active_learning.get_correlation_eigen(x_mc_pool, model_gp, mean_pred, std_pred)
         
-        elif args.acq_f == 'random':
+        elif al_strategy == 'random':
             selected_indices = active_learning.get_random(x_mc_pool)
 
         # Get training and target samples
@@ -146,7 +181,9 @@ for exp in range(args.n_exp):
 
     with open(results_dir+'exp_'+str(exp)+'_'+date_time_stamp+'.pkl', 'wb') as file_id:
                     pickle.dump(results_file, file_id)
-
     end_time = time.time()
     execution_time = end_time - start_time
+
+    wandb.log({"exc_time_mins": execution_time/60}, step=it)
+    wandb.finish()
     print(f"Active learning completed in: {(execution_time/60):.2f} mins")

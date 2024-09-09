@@ -19,7 +19,7 @@ class BatchActiveLearning():
         return np.sum(eigen_values)
     
     def get_random(self, x_mc, samples=None):
-        print('random')
+        # print('random')
         if samples is None:
             act_samples = self.n_active_samples
         else:
@@ -73,7 +73,7 @@ class BatchActiveLearning():
         return selected_indices
     
     def get_correlation_det(self, x_mc, model, mean_prediction, std_prediction, samples=None):
-        print('determinant')
+        # print('determinant')
         if samples is None:
             act_samples = self.n_active_samples
         else:
@@ -101,8 +101,7 @@ class BatchActiveLearning():
         return selected_indices
     
     def get_correlation_eigen(self, x_mc, model, mean_prediction, std_prediction, samples=None):
-        print('eigen')
-        
+        # print('eigen')
         if samples is None:
             act_samples = self.n_active_samples
         else:

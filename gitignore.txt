@@ -10,3 +10,6 @@ results/
 
 # Mac
 .DS_Store
+
+# wandb
+wandb/
