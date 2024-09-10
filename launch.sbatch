@@ -1,7 +1,7 @@
 #!/bin/bash
 # Submission script for nic5
 #
-#SBATCH --job-name=batchAL_fourbranch
+#SBATCH --job-name=BAL_fourbranch
 #SBATCH --time=36:00:00 # hh:mm:ss
 #SBATCH --array=0-11    # 36 combinations in total (1 * 3 * 4)
 #SBATCH --ntasks=1
@@ -30,6 +30,7 @@ ACQ_B=${ACQ_B_OPTIONS[$ACQ_B_INDEX]}
 
 #SBATCH --mail-user=jmoran@uliege.be
 #SBATCH --mail-type=ALL
-
+export WANDB_API_KEY='92527d5edd061155ce7397976a5b564066fc78c2'
+source env/bin/activate
 # Run the Python script with the selected arguments
-python main_batchactive.py --ls=$LS --acq_f=$ACQ_F --acq_b=$ACQ_B
+python main_batchactive.py --ls=$LS --al_f=$ACQ_F --al_b=$ACQ_B --n_exp=10
