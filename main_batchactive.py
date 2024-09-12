@@ -23,7 +23,7 @@ parser.add_argument('--ls', type=str, nargs='?', action='store', default='four_b
                     help='Specify target LS: four_branch, himmelblau, pushover_frame. Def: four_branch')
 
 parser.add_argument('--al_f', type=str, nargs='?', action='store', default='u_function',
-                    help='Specify the acquisition function: correlation_det, correlation_eigen, u_function, random. Def: u_function')
+                    help='Specify the acquisition function: correlation_det, correlation_eigen, correlation_entropy, u_function, random. Def: u_function')
 
 parser.add_argument('--al_b', type=int, nargs='?', action='store', default=3,
                     help='Specify the batch sample size per iteration. Def: 3.')
@@ -42,13 +42,14 @@ lstate = ls_REGISTRY[args.ls]()
 #-----------------------------------------------------------------------------------------------
 # Loading experiment setting 
 config={}
+casestudy = config['case_study'] = args.ls
+al_strategy = config['al_strategy'] = args.al_f
+al_batch = config['al_batch'] = args.al_b
 doe = config['doe'] = 10     # initial DoE with LHS
 budget = config['budget'] = 200  # max number of samples
 n_mcs_pool = config['n_mcs_pool'] = 1e6  # n_MonteCarlo pool of samples for learning
 n_mcs_pf = config['n_mcs_pf']  = 1e6  # n_MonteCarlo pool of samples for pf estimation
-al_strategy = config['al_strategy'] = args.al_f
-al_batch = config['al_batch'] = args.al_b
-casestudy = config['case_study'] = args.ls
+n_exp = config['n_exp'] = args.n_exp
 iterations = int((budget-doe)/args.al_b) #iteration to complete the available budget-doe
 
 Pf_ref = lstate.target
@@ -62,7 +63,7 @@ results_dir = f'results/{casestudy}/{al_strategy}/{al_batch}/'
 if not os.path.exists(results_dir):
     os.makedirs(results_dir)
 
-print(f'Target LS: {casestudy}, AL_Strategy: {al_strategy}')
+print(f'Experiment settings: {config}')
 
 for exp in range(args.n_exp):
     #results
@@ -100,11 +101,12 @@ for exp in range(args.n_exp):
 
     for it in range(iterations + 1):
         # Find the minimum and maximum distance between training samples
-        # min_distance, _ = min_max_distance(x_train_norm, x_train_norm)
-        kernel = 1.0 * Matern(length_scale=1.0, length_scale_bounds=(1e-6, 10), nu=1.5)
+        min_distance, max_distance = min_max_distance(x_train_norm, x_train_norm)
+        kernel = 1.0 * Matern(length_scale=1.0, length_scale_bounds=(min_distance, max_distance), nu=1.5)
         
         print(f'Training size: {len(x_train_norm)} samples', end=" ")
         wandb.log({"train_size": len(x_train_norm)}, step=it)
+
         # Train the Gaussian Process model
         # kernel = 1.0 * Matern(length_scale=1.0, nu=1.5)
         model_gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=9)
@@ -153,6 +155,9 @@ for exp in range(args.n_exp):
 
         elif al_strategy == 'correlation_eigen':
             selected_indices = active_learning.get_correlation_eigen(x_mc_pool, model_gp, mean_pred, std_pred)
+
+        elif al_strategy == 'correlation_entropy':
+            selected_indices = active_learning.get_correlation_entropy(x_mc_pool, model_gp, mean_pred, std_pred)           
         
         elif al_strategy == 'random':
             selected_indices = active_learning.get_random(x_mc_pool)

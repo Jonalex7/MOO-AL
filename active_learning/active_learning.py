@@ -18,6 +18,21 @@ class BatchActiveLearning():
         eigen_values, _ = np.linalg.eig(cov_assemble)
         return np.sum(eigen_values)
     
+    def differential_entropy(self, x_mc, model, sample, selected_indices):
+        x_assemble = x_mc[selected_indices + [sample]]
+        _, cov_assemble = model.predict(x_assemble, return_std=False, return_cov=True)
+        # Differential entropy
+        # Compute the dimensionality (number of samples)
+        k = cov_assemble.shape[0]
+        # Calculate the determinant of the covariance matrix
+        det_cov = np.linalg.det(cov_assemble)
+        if det_cov <= 0:
+            det_cov = 1e-6
+
+        differential_entropy = 0.5 * np.log((2 * np.pi * np.e)**k * det_cov)
+        
+        return max(differential_entropy, 0) 
+    
     def get_random(self, x_mc, samples=None):
         # print('random')
         if samples is None:
@@ -118,6 +133,34 @@ class BatchActiveLearning():
 
             #evaluate U_function normalised with det_cov
             u_function = (mean_prediction.abs())/sum_eigen
+
+            #avoid selected values
+            u_function[selected_indices] = np.inf
+
+            #adding selected indices
+            _, u_min_idx = u_function.topk(1, largest=False)
+            selected_indices.append(u_min_idx.item())
+
+        return selected_indices
+
+    def get_correlation_entropy(self, x_mc, model, mean_prediction, std_prediction, samples=None):
+        # print('determinant')
+        if samples is None:
+            act_samples = self.n_active_samples
+        else:
+            act_samples = samples
+        #firs sample evaluated with U_function
+        selected_indices = self.get_u_function(mean_prediction, std_prediction, samples=1)
+
+        for _ in range(act_samples - 1):
+            # Covariance computation
+            # Use parallel processing to calculate the determinants for all samples
+            det_cov = Parallel(n_jobs=-1)(delayed(self.differential_entropy)(x_mc, model, sample, selected_indices) for sample in range(len(x_mc)))
+        
+            det_cov = torch.tensor(det_cov)
+
+            #evaluate U_function normalised with det_cov
+            u_function = (mean_prediction.abs())/det_cov
 
             #avoid selected values
             u_function[selected_indices] = np.inf

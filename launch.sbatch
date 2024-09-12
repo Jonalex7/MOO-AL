@@ -3,7 +3,7 @@
 #
 #SBATCH --job-name=BAL_fourbranch
 #SBATCH --time=36:00:00 # hh:mm:ss
-#SBATCH --array=0-11    # 36 combinations in total (1 * 3 * 4)
+#SBATCH --array=0-3    # 8 combinations in total (1 * 1 * 4)
 #SBATCH --ntasks=1
 #SBATCH --mem=10G        # Memory to allocate per allocated CPU core
 #SBATCH --partition=batch
@@ -11,7 +11,8 @@
 # Define arrays for the arguments
 # LS_OPTIONS=("four_branch" "himmelblau" "pushover_frame")
 LS_OPTIONS=("four_branch")
-ACQ_F_OPTIONS=("correlation_det" "correlation_eigen" "u_function")
+#ACQ_F_OPTIONS=("correlation_det" "correlation_eigen" "u_function")
+ACQ_F_OPTIONS=("correlation_entropy")
 ACQ_B_OPTIONS=(3 5 7 10)
 
 # Calculate the total number of combinations
@@ -31,6 +32,7 @@ ACQ_B=${ACQ_B_OPTIONS[$ACQ_B_INDEX]}
 #SBATCH --mail-user=jmoran@uliege.be
 #SBATCH --mail-type=ALL
 export WANDB_API_KEY='92527d5edd061155ce7397976a5b564066fc78c2'
+wandb offline
 source env/bin/activate
 # Run the Python script with the selected arguments
 python main_batchactive.py --ls=$LS --al_f=$ACQ_F --al_b=$ACQ_B --n_exp=10
