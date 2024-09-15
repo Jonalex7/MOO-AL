@@ -25,10 +25,10 @@ class g_pushover():
         self.target_pf = 0.002007 # ref with MCS = 1e6 , pf=0.002007 B=2.87705
         self.standard_marginals = {f'x{var+1}': [0, 1.0, 'norm'] for var in range(self.input_dim )}
 
-        self.physical_marginals = {'x1': [14938.0, 14938.0 * 0.1, 'lognormal'], # Mybeam_mean = 10938.0   # yield moment at plastic hinge location (i.e., My of RBS section, if used)
-                          'x2': [23350.0, 23350.0 * 0.1, 'lognormal'],  # yield moment of colum section
-                          'x3': [38.5, 38.5 * 0.02, 'normal'],   # cross-sectional area column section W24x131 for Story 1 & 2 (elasticBeamColumn: 111, 121, 112, 122)
-                          'x4': [45.0, 45.0 * 0.1, 'lognormal']}   # external load at node 12
+        self.physical_marginals = {'x1': [14938.0, 14938.0 * 0.1, 'lognorm'], # Mybeam_mean = 10938.0   # yield moment at plastic hinge location (i.e., My of RBS section, if used)
+                          'x2': [23350.0, 23350.0 * 0.1, 'lognorm'],  # yield moment of colum section
+                          'x3': [38.5, 38.5 * 0.02, 'norm'],   # cross-sectional area column section W24x131 for Story 1 & 2 (elasticBeamColumn: 111, 121, 112, 122)
+                          'x4': [45.0, 45.0 * 0.1, 'lognorm']}   # external load at node 12
                           
         '''mean(or min), std(or max), marginal_distrib'''
 
