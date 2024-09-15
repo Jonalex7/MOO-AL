@@ -1,32 +1,37 @@
 import torch
 import numpy as np
 from scipy.stats import norm, uniform, lognorm
+import scipy.stats as stats
 
-def isoprob_transform (x_normalised, marginals):
-    # Assuming source distribution of x_normalised between 0,1
-    x_scaled = np.zeros_like(x_normalised)
+def isoprobabilistic_transform(x, source_marginals, target_marginals):
+    if not isinstance(x, torch.Tensor):
+        x = torch.tensor(x, dtype=torch.float32)
 
-    for margin in range (0, x_scaled.shape[1]):
-        var = 'x' + str (margin + 1)
-        if marginals[var][2] == 'normal':
-            loc_ = marginals[var][0]
-            scale_ = marginals[var][1]
-            x_scaled[:, margin] = np.array(norm.ppf(x_normalised[:, margin], loc=loc_, scale=scale_))
-
-        elif marginals[var][2] == 'uniform':
-            loc_ = marginals[var][0]
-            scale_ = marginals[var][1]
-            x_scaled[:, margin] = np.array(uniform.ppf(x_normalised[:, margin], loc=loc_, scale=scale_-loc_))
-
-        elif marginals[var][2] == 'lognormal':
-            xlog_mean = np.array(marginals[var][0])
-            xlog_std = np.array(marginals[var][1])
-            # converting lognormal mean and std. dev.
-            SigmaLogNormal = np.sqrt( np.log(1+(xlog_std/xlog_mean)**2))
-            MeanLogNormal = np.log(xlog_mean) - SigmaLogNormal**2/2
-            x_scaled[:, margin] = np.array(lognorm.ppf(x_normalised[:, margin], s=SigmaLogNormal, scale=xlog_mean)) 
+    if len(x.shape) == 1:
+        x = x.unsqueeze(0)
+        
+    transformed_x = torch.empty_like(x)
     
-    return x_scaled
+    for i, (source_params, target_params) in enumerate(zip(source_marginals.values(), target_marginals.values())):
+        loc_source, scale_source, dist_source = source_params
+        loc_target, scale_target, dist_target = target_params
+        
+        # Get source distribution
+        dist_source = getattr(stats, dist_source)(loc=loc_source, scale=scale_source)
+        
+        # Get target distribution
+        dist_target = getattr(stats, dist_target)(loc=loc_target, scale=scale_target)
+        
+        # Calculate the CDF of source samples
+        cdf_source = dist_source.cdf(x[:, i])
+        
+        # Use the inverse CDF of the target distribution to get transformed samples
+        transformed_x[:, i] = torch.tensor(dist_target.ppf(cdf_source))
+    
+    if x.shape[0] == 1:
+        return transformed_x.squeeze()
+    else:
+        return transformed_x
 
 def min_max_distance(tensor1, tensor2):
     # both tensors are of the same dimensionality

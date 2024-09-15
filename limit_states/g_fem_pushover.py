@@ -1,9 +1,10 @@
+import torch
 import numpy as np
 from scipy.stats import norm
 from scipy.stats import qmc
 from joblib import Parallel, delayed
 
-from utils.data import isoprob_transform
+from utils.data import isoprobabilistic_transform
 
 from limit_states.pushover_concentrated import PushoverConcetrated_mod
 
@@ -21,9 +22,10 @@ class g_pushover():
     def __init__(self):
         self.input_dim = 4
         self.output_dim = 1
-        self.target = 0.002 # ref with MCS = 1e6 , pf=0.002007 B=2.87705
+        self.target_pf = 0.002007 # ref with MCS = 1e6 , pf=0.002007 B=2.87705
+        self.standard_marginals = {f'x{var+1}': [0, 1.0, 'norm'] for var in range(self.input_dim )}
 
-        self.marginals = {'x1': [14938.0, 14938.0 * 0.1, 'lognormal'], # Mybeam_mean = 10938.0   # yield moment at plastic hinge location (i.e., My of RBS section, if used)
+        self.physical_marginals = {'x1': [14938.0, 14938.0 * 0.1, 'lognormal'], # Mybeam_mean = 10938.0   # yield moment at plastic hinge location (i.e., My of RBS section, if used)
                           'x2': [23350.0, 23350.0 * 0.1, 'lognormal'],  # yield moment of colum section
                           'x3': [38.5, 38.5 * 0.02, 'normal'],   # cross-sectional area column section W24x131 for Story 1 & 2 (elasticBeamColumn: 111, 121, 112, 122)
                           'x4': [45.0, 45.0 * 0.1, 'lognormal']}   # external load at node 12
@@ -39,41 +41,36 @@ class g_pushover():
         lat2 = 16.255
         lat3 = 31.636
         ratio_ref = lat3/lat2
-
+        
+        #running loop in parallel
         max_baseshear_mc = Parallel(n_jobs=-1)(delayed(self.parallel_frame_eval)(x[sample][:-1]) for sample in range(len(x)))
 
         # Evaluation of frame external load
         ext_load = 2*x[:,-1] * (1+ratio_ref)
         g_pushover = max_baseshear_mc - ext_load
-        return g_pushover
+        return torch.tensor(g_pushover)
     
     def monte_carlo_estimate(self, n_samples):
         n_mcs = int(n_samples)
-        x_mc_norm = np.random.uniform(0, 1, size=(int(n_mcs), self.input_dim))
-        x_mc_scaled = isoprob_transform(x_mc_norm, self.marginals)
-        y_mc = self.eval_lstate(x_mc_scaled)
-        Pf_ref = np.sum(y_mc < 0) / n_mcs
+        x_mc_norm = np.random.normal(0, 1, size=(n_mcs, self.input_dim))
+        x_mc_physical = isoprobabilistic_transform(x_mc_norm, self.standard_marginals, self.physical_marginals)
+        y_mc = self.eval_lstate(x_mc_physical)
+        Pf_ref = torch.sum(y_mc < 0) / n_mcs
         B_ref = - norm.ppf(Pf_ref)
-        return Pf_ref, B_ref, x_mc_scaled, y_mc
+        return Pf_ref.item(), B_ref, x_mc_physical, y_mc
     
     def get_doe(self, n_samples=10, method='lhs', random_state=None):
-        n_passive = int(n_samples)
         if random_state is None:
-            random_state = np.random.RandomState()
+            random_state = np.random.RandomState()  # Default if no random state is passed
 
+        # Generates samples that are uniformly distributed within the unit hypercube [0,1]^d
+        uniform_marginals = {f'x{var+1}': [0, 1.0, 'uniform'] for var in range(self.input_dim )}
         sampler = qmc.LatinHypercube(d=self.input_dim, seed=random_state)
-        x_norm = sampler.random(n=n_passive)
-        x_scaled = isoprob_transform(x_norm, self.marginals)
-        y_scaled = self.eval_lstate(x_scaled)
+        x_uniform = sampler.random(n=int(n_samples))
 
-        return x_norm, x_scaled, y_scaled
-    
-    #Sobol DoE
-    '''def get_doe_points(self, exp_sobol):
-        sampler = qmc.Sobol(d=self.input_dim, scramble=True)    #d=dimensionality
-        sample = sampler.random_base2(m=exp_sobol)   #change m=exponent to increase the sample size
-        l_bounds = [-2.0, -2.0]  #design domain for each variable in the physical space
-        u_bounds = [2.0, 2.0]
-        X_active = qmc.scale(sample, l_bounds, u_bounds)
-        Y_active = self.eval_lstate(X_active)
-        return X_active, Y_active'''
+        # Converting samples from uniform to physical and standard space
+        x_doe_physical = isoprobabilistic_transform(x_uniform, uniform_marginals, self.physical_marginals)
+        x_doe_norm = isoprobabilistic_transform(x_uniform, uniform_marginals, self.standard_marginals)
+        y_scaled = self.eval_lstate(x_doe_physical)
+
+        return x_doe_norm, x_doe_physical, y_scaled

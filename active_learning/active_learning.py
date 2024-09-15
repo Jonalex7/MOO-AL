@@ -7,6 +7,24 @@ class BatchActiveLearning():
         print('engine humming...')
         self.n_active_samples = n_active_samples
 
+        # Define the strategy mapping as a class attribute
+        self.al_strategy_mapping = {
+            'u_function': (self.get_u_function, ['mean_prediction', 'std_prediction']),
+            'correlation_det': (self.get_correlation_det, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
+            'correlation_eigen': (self.get_correlation_eigen, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
+            'correlation_entropy': (self.get_correlation_entropy, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
+            'random': (self.get_random, ['x_mc_pool'])
+        }
+
+    def select_indices(self, al_strategy, **kwargs):
+        if al_strategy in self.al_strategy_mapping:
+            method, required_args = self.al_strategy_mapping[al_strategy]
+            # Extract the required arguments from kwargs
+            args = [kwargs[arg] for arg in required_args]
+            return method(*args)
+        else:
+            raise ValueError(f"Unknown active learning strategy: {al_strategy}")
+        
     def calculate_determinant(self, x_mc, model, sample, selected_indices):
         x_assemble = x_mc[selected_indices + [sample]]
         _, cov_assemble = model.predict(x_assemble, return_std=False, return_cov=True)

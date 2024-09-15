@@ -13,7 +13,7 @@ import time
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import BatchActiveLearning
-from utils.data import isoprob_transform, min_max_distance
+from utils.data import min_max_distance, isoprobabilistic_transform
 
 #-----------------------------------------------------------------------------------------------
 #arguments parser
@@ -50,11 +50,14 @@ budget = config['budget'] = 200  # max number of samples
 n_mcs_pool = config['n_mcs_pool'] = 1e6  # n_MonteCarlo pool of samples for learning
 n_mcs_pf = config['n_mcs_pf']  = 1e6  # n_MonteCarlo pool of samples for pf estimation
 n_exp = config['n_exp'] = args.n_exp
-iterations = int((budget-doe)/args.al_b) #iteration to complete the available budget-doe
+iterations = int((budget-doe)/args.al_b) + 1 #iteration to complete the available budget-doe
 
-Pf_ref = lstate.target
+Pf_ref = lstate.target_pf
 B_ref = - norm.ppf(Pf_ref)
 b_j = 0
+
+# Default seeds
+seeds_exp= [391252418, 90523161, 375021598, 221860729, 45301975, 289396467, 698737664, 70359637, 800466323, 316421878]
 
 #results directory
 date_time_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -74,7 +77,8 @@ for exp in range(args.n_exp):
     if args.seed is not None:
         seed_exp = args.seed
     else:
-        seed_exp = np.random.randint(0, 2**30 - 1)
+        # seed_exp = np.random.randint(0, 2**30 - 1)
+        seed_exp = seeds_exp[exp]
 
     np.random.seed(seed_exp)
     torch.manual_seed(seed_exp)
@@ -91,14 +95,13 @@ for exp in range(args.n_exp):
     #-----------------------------------------------------------------------------------------------
     # Design of experiments
     x_train_norm, _ , y_train = lstate.get_doe(n_samples=doe, method='lhs', random_state=random_state)
-    x_train_norm = torch.tensor(x_train_norm)
-    y_train = torch.tensor(y_train)
 
     # Loading active learning methods
     active_learning = BatchActiveLearning(n_active_samples= args.al_b)
 
     start_time = time.time()
 
+    # Active learning loop
     for it in range(iterations + 1):
         # Find the minimum and maximum distance between training samples
         min_distance, max_distance = min_max_distance(x_train_norm, x_train_norm)
@@ -111,10 +114,9 @@ for exp in range(args.n_exp):
         # kernel = 1.0 * Matern(length_scale=1.0, nu=1.5)
         model_gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=9)
         model_gp.fit(x_train_norm, y_train)
-        # print('kernel: ', model_gp.kernel)
 
         # Pf estimation with MCs
-        x_mcs_pf = np.random.uniform(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
+        x_mcs_pf = np.random.normal(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
         mean_pf = model_gp.predict(x_mcs_pf, return_std=False)
         Pf_model = np.sum(mean_pf < 0) / len(mean_pf)
         pf_evol.append(Pf_model)
@@ -142,35 +144,31 @@ for exp in range(args.n_exp):
         b_j = B_model
         
         # Making predictions of mean and std for mc population 
-        x_mc_pool = np.random.uniform(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
+        x_mc_pool = np.random.normal(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
         mean_prediction, std_prediction = model_gp.predict(x_mc_pool, return_std=True)
         mean_pred = torch.tensor(mean_prediction)
         std_pred = torch.tensor(std_prediction)
-            
-        if al_strategy == 'u_function':
-            selected_indices = active_learning.get_u_function(mean_pred, std_pred)
 
-        elif al_strategy == 'correlation_det':
-            selected_indices = active_learning.get_correlation_det(x_mc_pool, model_gp, mean_pred, std_pred)
-
-        elif al_strategy == 'correlation_eigen':
-            selected_indices = active_learning.get_correlation_eigen(x_mc_pool, model_gp, mean_pred, std_pred)
-
-        elif al_strategy == 'correlation_entropy':
-            selected_indices = active_learning.get_correlation_entropy(x_mc_pool, model_gp, mean_pred, std_pred)           
-        
-        elif al_strategy == 'random':
-            selected_indices = active_learning.get_random(x_mc_pool)
+        # Define the arguments for active learning
+        args = {
+            'mean_prediction': mean_pred,
+            'std_prediction': std_pred,
+            'x_mc_pool': x_mc_pool,
+            'model': model_gp
+        }
+        # Select_indices method with the chosen active learning strategy
+        selected_indices = active_learning.select_indices(al_strategy, **args)
 
         # Get training and target samples
         selected_samples_norm = x_mc_pool[selected_indices]
 
-        selected_samples = isoprob_transform(selected_samples_norm, lstate.marginals)
+        # Converting to phyisical marginals and evaluating the model
+        selected_samples = isoprobabilistic_transform(selected_samples_norm, lstate.standard_marginals, lstate.physical_marginals)
         selected_outputs = lstate.eval_lstate(selected_samples)
 
         # Update the training set
         x_train_norm = torch.cat((x_train_norm, torch.tensor(selected_samples_norm)), 0)
-        y_train = torch.cat((y_train, torch.tensor(selected_outputs)))
+        y_train = torch.cat((y_train, selected_outputs))
 
         #saving partial results
         results_file['model'] = model_gp  
