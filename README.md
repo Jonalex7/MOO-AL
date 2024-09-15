@@ -34,6 +34,8 @@ python main_batchactive.py [-h] [--ls [LS]] [--al_f [AL_F]] [--al_b [AL_B]] [--s
   `correlation_det`
   
   `correlation_eigen`
+
+  `correlation_entropy`
   
   `random`
 
