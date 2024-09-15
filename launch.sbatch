@@ -2,10 +2,11 @@
 # Submission script for nic5
 #
 #SBATCH --job-name=BAL_fourbranch
-#SBATCH --time=36:00:00 # hh:mm:ss
+#SBATCH --time=40:00:00 # hh:mm:ss
 #SBATCH --array=0-3    # 8 combinations in total (1 * 1 * 4)
 #SBATCH --ntasks=1
-#SBATCH --mem=10G        # Memory to allocate per allocated CPU core
+#SBATCH --cpus-per-task=10  # 10 cores for parallelism
+#SBATCH --mem=20G        # Memory to allocate per allocated CPU core
 #SBATCH --partition=batch
 
 # Define arrays for the arguments

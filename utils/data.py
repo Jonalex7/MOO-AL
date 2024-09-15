@@ -16,17 +16,29 @@ def isoprobabilistic_transform(x, source_marginals, target_marginals):
         loc_source, scale_source, dist_source = source_params
         loc_target, scale_target, dist_target = target_params
         
-        # Get source distribution
-        dist_source = getattr(stats, dist_source)(loc=loc_source, scale=scale_source)
-        
-        # Get target distribution
-        dist_target = getattr(stats, dist_target)(loc=loc_target, scale=scale_target)
-        
+        # Define source distribution
+        if dist_source == 'lognorm':
+            shape_source = scale_source / loc_source  # Shape parameter for lognorm
+            dist_source = stats.lognorm(s=shape_source, loc=0, scale=loc_source)
+        elif dist_source == 'uniform':
+            dist_source = stats.uniform(loc=loc_source, scale=scale_source)
+        else:
+            dist_source = getattr(stats, dist_source)(loc=loc_source, scale=scale_source)
+
+        # Define target distribution
+        if dist_target == 'lognorm':
+            shape_target = scale_target / loc_target  # Shape parameter for lognorm
+            dist_target = stats.lognorm(s=shape_target, loc=0, scale=loc_target)
+        elif dist_target == 'uniform':
+            dist_target = stats.uniform(loc=loc_target, scale=scale_target)
+        else:
+            dist_target = getattr(stats, dist_target)(loc=loc_target, scale=scale_target)
+
         # Calculate the CDF of source samples
         cdf_source = dist_source.cdf(x[:, i])
         
-        # Use the inverse CDF of the target distribution to get transformed samples
-        transformed_x[:, i] = torch.tensor(dist_target.ppf(cdf_source))
+        # Use the inverse CDF (PPF) of the target distribution to get transformed samples
+        transformed_x[:, i] = torch.tensor(dist_target.ppf(cdf_source), dtype=torch.float32)
     
     if x.shape[0] == 1:
         return transformed_x.squeeze()
