@@ -104,14 +104,14 @@ for exp in range(args.n_exp):
     # Active learning loop
     for it in range(iterations + 1):
         # Find the minimum and maximum distance between training samples
-        min_distance, max_distance = min_max_distance(x_train_norm, x_train_norm)
-        kernel = 1.0 * Matern(length_scale=1.0, length_scale_bounds=(min_distance, max_distance), nu=1.5)
+        # min_distance, max_distance = min_max_distance(x_train_norm, x_train_norm)
+        # kernel = 1.0 * Matern(length_scale=1.0, length_scale_bounds=(min_distance, max_distance), nu=1.5)
         
         print(f'Training size: {len(x_train_norm)} samples', end=" ")
         wandb.log({"train_size": len(x_train_norm)}, step=it)
 
         # Train the Gaussian Process model
-        # kernel = 1.0 * Matern(length_scale=1.0, nu=1.5)
+        kernel = 1.0 * Matern(length_scale=1.0, nu=1.5)
         model_gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=9)
         model_gp.fit(x_train_norm, y_train)
 
@@ -150,14 +150,14 @@ for exp in range(args.n_exp):
         std_pred = torch.tensor(std_prediction)
 
         # Define the arguments for active learning
-        args = {
+        args_al= {
             'mean_prediction': mean_pred,
             'std_prediction': std_pred,
             'x_mc_pool': x_mc_pool,
             'model': model_gp
         }
         # Select_indices method with the chosen active learning strategy
-        selected_indices = active_learning.select_indices(al_strategy, **args)
+        selected_indices = active_learning.select_indices(al_strategy, **args_al)
 
         # Get training and target samples
         selected_samples_norm = x_mc_pool[selected_indices]
