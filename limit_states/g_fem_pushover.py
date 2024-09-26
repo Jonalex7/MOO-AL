@@ -43,12 +43,12 @@ class g_pushover():
         ratio_ref = lat3/lat2
         
         #running loop in parallel
-        max_baseshear_mc = Parallel(n_jobs=-1)(delayed(self.parallel_frame_eval)(x[sample][:-1]) for sample in range(len(x)))
+        max_baseshear_mc = Parallel(n_jobs=-1)(delayed(self.parallel_frame_eval)(x[sample][:-1].tolist()) for sample in range(len(x)))
 
         # Evaluation of frame external load
         ext_load = 2*x[:,-1] * (1+ratio_ref)
-        g_pushover = max_baseshear_mc - ext_load
-        return torch.tensor(g_pushover)
+        g_pushover = torch.tensor(max_baseshear_mc) - ext_load
+        return g_pushover
     
     def monte_carlo_estimate(self, n_samples):
         n_mcs = int(n_samples)
