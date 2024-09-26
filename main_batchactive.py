@@ -7,6 +7,7 @@ import argparse
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
 from scipy.stats import norm
+from scipy.optimize import fmin_l_bfgs_b
 
 import wandb
 import time
@@ -23,7 +24,7 @@ parser.add_argument('--ls', type=str, nargs='?', action='store', default='four_b
                     help='Specify target LS: four_branch, himmelblau, pushover_frame. Def: four_branch')
 
 parser.add_argument('--al_f', type=str, nargs='?', action='store', default='u_function',
-                    help='Specify the acquisition function: correlation_det, correlation_eigen, correlation_entropy, u_function, random. Def: u_function')
+                    help='Specify the acquisition function: corr_det, corr_eigen, corr_entropy, corr_condvar, u_function, random. Def: u_function')
 
 parser.add_argument('--al_b', type=int, nargs='?', action='store', default=3,
                     help='Specify the batch sample size per iteration. Def: 3.')
@@ -46,7 +47,7 @@ casestudy = config['case_study'] = args.ls
 al_strategy = config['al_strategy'] = args.al_f
 al_batch = config['al_batch'] = args.al_b
 doe = config['doe'] = 10     # initial DoE with LHS
-budget = config['budget'] = 200  # max number of samples
+budget = config['budget'] = 50  # max number of samples
 n_mcs_pool = config['n_mcs_pool'] = 1e6  # n_MonteCarlo pool of samples for learning
 n_mcs_pf = config['n_mcs_pf']  = 1e6  # n_MonteCarlo pool of samples for pf estimation
 n_exp = config['n_exp'] = args.n_exp
@@ -67,6 +68,10 @@ if not os.path.exists(results_dir):
     os.makedirs(results_dir)
 
 print(f'Experiment settings: {config}')
+
+def custom_optimizer(obj_func, initial_theta, bounds):
+    opt_res = fmin_l_bfgs_b(obj_func, initial_theta, bounds=bounds, maxiter=1000)
+    return opt_res[0], opt_res[1]
 
 for exp in range(args.n_exp):
     #results
@@ -89,9 +94,8 @@ for exp in range(args.n_exp):
     results_file['config'] = config
     #-----------------------------------------------------------------------------------------------
     # log to wanb
-    wandb.init(project='Batch_AL',
-    name=f'{casestudy}_{al_strategy}_{al_batch}',
-    config=config)
+    run_name = f'{casestudy}_{al_strategy}_{al_batch}'
+    wandb.init(project='Batch_AL', mode="offline", name=run_name, config=config)
     #-----------------------------------------------------------------------------------------------
     # Design of experiments
     x_train_norm, _ , y_train = lstate.get_doe(n_samples=doe, method='lhs', random_state=random_state)
@@ -105,14 +109,14 @@ for exp in range(args.n_exp):
     for it in range(iterations + 1):
         # Find the minimum and maximum distance between training samples
         # min_distance, max_distance = min_max_distance(x_train_norm, x_train_norm)
-        # kernel = 1.0 * Matern(length_scale=1.0, length_scale_bounds=(min_distance, max_distance), nu=1.5)
+        # kernel = 1.0 * Matern(length_scale=1.0, length_scale_bounds=(min_distance, 1e3), nu=1.5)
         
         print(f'Training size: {len(x_train_norm)} samples', end=" ")
         wandb.log({"train_size": len(x_train_norm)}, step=it)
 
         # Train the Gaussian Process model
         kernel = 1.0 * Matern(length_scale=1.0, nu=1.5)
-        model_gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=9)
+        model_gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=9, normalize_y=True, optimizer=custom_optimizer)
         model_gp.fit(x_train_norm, y_train)
 
         # Pf estimation with MCs
@@ -158,6 +162,7 @@ for exp in range(args.n_exp):
         }
         # Select_indices method with the chosen active learning strategy
         selected_indices = active_learning.select_indices(al_strategy, **args_al)
+        # print('Selected idx: ', selected_indices)
 
         # Get training and target samples
         selected_samples_norm = x_mc_pool[selected_indices]
