@@ -47,7 +47,7 @@ casestudy = config['case_study'] = args.ls
 al_strategy = config['al_strategy'] = args.al_f
 al_batch = config['al_batch'] = args.al_b
 doe = config['doe'] = 10     # initial DoE with LHS
-budget = config['budget'] = 50  # max number of samples
+budget = config['budget'] = 200  # max number of samples
 n_mcs_pool = config['n_mcs_pool'] = 1e6  # n_MonteCarlo pool of samples for learning
 n_mcs_pf = config['n_mcs_pf']  = 1e6  # n_MonteCarlo pool of samples for pf estimation
 n_exp = config['n_exp'] = args.n_exp
@@ -167,7 +167,7 @@ for exp in range(args.n_exp):
         # Get training and target samples
         selected_samples_norm = x_mc_pool[selected_indices]
 
-        # Converting to phyisical marginals and evaluating the model
+        # Converting to physical marginals and evaluating the model
         selected_samples = isoprobabilistic_transform(selected_samples_norm, lstate.standard_marginals, lstate.physical_marginals)
         selected_outputs = lstate.eval_lstate(selected_samples)
 

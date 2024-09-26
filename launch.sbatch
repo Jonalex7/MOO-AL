@@ -2,18 +2,18 @@
 # Submission script for nic5
 #
 #SBATCH --job-name=BAL_fourbranch
-#SBATCH --time=40:00:00 # hh:mm:ss
+#SBATCH --time=30:00:00 # hh:mm:ss
 #SBATCH --array=0-3    # 8 combinations in total (1 * 1 * 4)
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=10  # 10 cores for parallelism
+#SBATCH --cpus-per-task=10  # 10 cores 
 #SBATCH --mem=20G        # Memory to allocate per allocated CPU core
 #SBATCH --partition=batch
 
 # Define arrays for the arguments
 # LS_OPTIONS=("four_branch" "himmelblau" "pushover_frame")
 LS_OPTIONS=("four_branch")
-#ACQ_F_OPTIONS=("correlation_det" "correlation_eigen" "u_function")
-ACQ_F_OPTIONS=("correlation_entropy")
+#ACQ_F_OPTIONS=("corr_det" "corr_eigen" "corr_entropy" "corr_condvar" "u_function" )
+ACQ_F_OPTIONS=("corr_condvar")
 ACQ_B_OPTIONS=(3 5 7 10)
 
 # Calculate the total number of combinations

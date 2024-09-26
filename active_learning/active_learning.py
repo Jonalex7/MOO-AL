@@ -10,9 +10,10 @@ class BatchActiveLearning():
         # Define the strategy mapping as a class attribute
         self.al_strategy_mapping = {
             'u_function': (self.get_u_function, ['mean_prediction', 'std_prediction']),
-            'correlation_det': (self.get_correlation_det, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
-            'correlation_eigen': (self.get_correlation_eigen, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
-            'correlation_entropy': (self.get_correlation_entropy, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
+            'corr_det': (self.get_corr_det, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
+            'corr_eigen': (self.get_corr_eigen, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
+            'corr_entropy': (self.get_corr_entropy, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
+            'corr_condvar': (self.get_corr_condvar, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
             'random': (self.get_random, ['x_mc_pool'])
         }
 
@@ -105,7 +106,7 @@ class BatchActiveLearning():
 
         return selected_indices
     
-    def get_correlation_det(self, x_mc, model, mean_prediction, std_prediction, samples=None):
+    def get_corr_det(self, x_mc, model, mean_prediction, std_prediction, samples=None):
         # print('determinant')
         if samples is None:
             act_samples = self.n_active_samples
@@ -133,7 +134,7 @@ class BatchActiveLearning():
 
         return selected_indices
     
-    def get_correlation_eigen(self, x_mc, model, mean_prediction, std_prediction, samples=None):
+    def get_corr_eigen(self, x_mc, model, mean_prediction, std_prediction, samples=None):
         # print('eigen')
         if samples is None:
             act_samples = self.n_active_samples
@@ -161,7 +162,7 @@ class BatchActiveLearning():
 
         return selected_indices
 
-    def get_correlation_entropy(self, x_mc, model, mean_prediction, std_prediction, samples=None):
+    def get_corr_entropy(self, x_mc, model, mean_prediction, std_prediction, samples=None):
         # print('determinant')
         if samples is None:
             act_samples = self.n_active_samples
@@ -186,5 +187,80 @@ class BatchActiveLearning():
             #adding selected indices
             _, u_min_idx = u_function.topk(1, largest=False)
             selected_indices.append(u_min_idx.item())
+
+        return selected_indices
+
+    def get_corr_condvar(self, x_mc, model, mean_prediction, std_prediction, block_size=300, samples=None):
+        # print('determinant')
+        if samples is None:
+            act_samples = self.n_active_samples
+        else:
+            act_samples = samples
+        # Define the block size to loop over the MC pool
+        block_size = block_size
+        # First sample obtained with U_function
+        selected_indices = self.get_u_function(mean_prediction, std_prediction, samples=1)
+
+        for _ in range(act_samples - 1):
+            # Extract the selected samples
+            selected_samples = x_mc[selected_indices]
+            num_selected = len(selected_indices)
+
+            u_min = torch.inf
+
+            # Loop over x_mc_pool in blocks
+            for i in range(0, len(x_mc), block_size):
+                # Determine the end index of the block
+                end_idx = min(i + block_size, len(x_mc))
+                
+                # Get the block indices
+                block_indices = np.arange(i, end_idx)
+                
+                # Remove selected_indices from block_indices to avoid duplicates
+                block_indices = np.setdiff1d(block_indices, selected_indices)
+                
+                # Get the block samples
+                block_samples = x_mc[block_indices]
+                
+                # Prepend selected_samples to block_samples
+                subset = np.vstack((selected_samples, block_samples))
+
+                # Compute the covariance matrix for the subset
+                _, cov_subset = model.predict(subset, return_std=False, return_cov=True)   
+
+                # Partition the covariance matrix
+                K_aa = cov_subset[:num_selected, :num_selected]
+                K_ab = cov_subset[:num_selected, num_selected:]
+                K_ba = cov_subset[num_selected:, :num_selected]
+                K_bb = cov_subset[num_selected:, num_selected:]
+
+                # Compute the inverse of K_aa
+                # ----------------------------------------------------------------------------------------------------
+                # Regularize if necessary to handle numerical issues
+                jitter = 1e-6 * np.eye(K_aa.shape[0]) # Add jitter for numerical stability
+                # Perform Cholesky decomposition of K_aa + jitter
+                try:
+                    L = np.linalg.cholesky(K_aa + jitter)
+                except np.linalg.LinAlgError:
+                    raise np.linalg.LinAlgError("Cholesky decomposition failed. Consider increasing the jitter term.")
+                # Solve K_aa @ X = K_ab
+                Y = np.linalg.solve(L, K_ab)
+                X = np.linalg.solve(L.T, Y)
+
+                # Compute the diagonal of the conditional covariance
+                diag_K_bb = np.diag(K_bb)
+                cross_terms = np.sum(K_ba * X.T, axis=1)
+                conditional_variances = diag_K_bb - cross_terms
+                # ----------------------------------------------------------------------------------------------------
+                # Evaluate U on the block
+                u_block = mean_prediction[block_indices].abs() / conditional_variances
+                u_min_block, u_min_idx = u_block.topk(1, largest=False)
+
+                # Get the index with the min global U value
+                if u_min_block < u_min:
+                    selected_idx = block_indices[u_min_idx]
+                    u_min = u_min_block
+
+            selected_indices = selected_indices + [selected_idx]
 
         return selected_indices

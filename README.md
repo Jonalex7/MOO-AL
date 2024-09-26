@@ -31,11 +31,13 @@ python main_batchactive.py [-h] [--ls [LS]] [--al_f [AL_F]] [--al_b [AL_B]] [--s
 
   `u_function` (default)
   
-  `correlation_det`
+  `corr_det`
   
-  `correlation_eigen`
+  `corr_eigen`
 
-  `correlation_entropy`
+  `corr_entropy`
+
+  `corr_condvar`
   
   `random`
 
