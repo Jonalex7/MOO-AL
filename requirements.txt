@@ -1,0 +1,5 @@
+numpy==1.26.1
+torch==2.4.0
+scikit-learn==1.5.1
+openseespy==3.4.0.8
+wandb==0.17.9
