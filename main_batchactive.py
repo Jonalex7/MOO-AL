@@ -4,6 +4,7 @@ from datetime import datetime
 import pickle
 import os
 import argparse
+import json
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
 from scipy.stats import norm
@@ -52,6 +53,7 @@ n_mcs_pool = config['n_mcs_pool'] = 1e6  # n_MonteCarlo pool of samples for lear
 n_mcs_pf = config['n_mcs_pf']  = 1e6  # n_MonteCarlo pool of samples for pf estimation
 n_exp = config['n_exp'] = args.n_exp
 name_exp = config['name_exp'] = 'out'
+save_interval = config['save_interval'] = 10
 iterations = int((budget-doe)/args.al_b) + 1 #iteration to complete the available budget-doe
 
 Pf_ref = lstate.target_pf
@@ -63,10 +65,12 @@ b_j = 0
 
 #results directory
 date_time_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-results_dir = f'results/{casestudy}/{al_strategy}/{al_batch}/'
+results_dir = f'results/{casestudy}/{al_strategy}_{al_batch}_{name_exp}_{date_time_stamp}/'
+store_model_dir = results_dir + 'model/'
 
-if not os.path.exists(results_dir):
-    os.makedirs(results_dir)
+for dir_path in [results_dir, store_model_dir]:
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path)
 
 print(f'Experiment settings: {config}')
 
@@ -89,10 +93,13 @@ torch.manual_seed(seed_exp)
 random_state = np.random.RandomState(seed_exp)
 
 config['seed'] = seed_exp
-results_file['config'] = config
+# Store the config file as a json file
+with open(results_dir + 'config.json', 'w') as file_id:
+    json.dump(config, file_id, indent=4)
+
 #-----------------------------------------------------------------------------------------------
 # log to wanb
-run_name = f'{casestudy}_{al_strategy}_{al_batch}'
+run_name = f'{casestudy}_{al_strategy}_{al_batch}_{name_exp}' # Bit redundant TBD
 wandb.init(project='Batch_AL', mode="offline", name=run_name, config=config)
 #-----------------------------------------------------------------------------------------------
 # Design of experiments
@@ -174,19 +181,26 @@ for it in range(iterations + 1):
     y_train = torch.cat((y_train, selected_outputs))
 
     #saving partial results
-    results_file['model'] = model_gp  
+    # results_file['model'] = model_gp  
     results_file['Pf_model'] = pf_evol
 
-    with open(results_dir + name_exp + '_' + date_time_stamp + '.pkl', 'wb') as file_id:
-                pickle.dump(results_file, file_id)
+    if it % save_interval == 0:
+        with open(results_dir + 'output.json', 'w') as file_id:
+                    json.dump(results_file, file_id)
+
+        # Save the model (pickle)
+        with open(store_model_dir + 'gp_' + str(it) + '.pkl', 'wb') as file_id:
+            pickle.dump(model_gp, file_id)
+
 
 #saving final results
-results_file['model'] = model_gp  
+# results_file['model'] = model_gp  
 results_file['Pf_model'] = pf_evol
 results_file['training_samples'] = x_train_norm, y_train  #training samples
 
-with open(results_dir + name_exp + '_' + date_time_stamp + '.pkl', 'wb') as file_id:
-                pickle.dump(results_file, file_id)
+with open(results_dir + 'output.json', 'w') as file_id:
+                json.dump(results_file, file_id)
+
 end_time = time.time()
 execution_time = end_time - start_time
 
