@@ -199,7 +199,7 @@ results_file['Pf_model'] = pf_evol
 results_file['training_samples'] = x_train_norm, y_train  #training samples
 
 with open(results_dir + 'output.json', 'w') as file_id:
-                json.dump(results_file, file_id)
+                json.dump(results_file, file_id, indent=4)
 
 end_time = time.time()
 execution_time = end_time - start_time
