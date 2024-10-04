@@ -201,6 +201,10 @@ results_file['training_samples'] = x_train_norm, y_train  #training samples
 with open(results_dir + 'output.json', 'w') as file_id:
                 json.dump(results_file, file_id, indent=4)
 
+# Save the model (pickle)
+with open(store_model_dir + 'gp_' + "last" + '.pkl', 'wb') as file_id:
+    pickle.dump(model_gp, file_id)
+
 end_time = time.time()
 execution_time = end_time - start_time
 
