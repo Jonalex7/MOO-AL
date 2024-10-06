@@ -7,6 +7,13 @@ In this repository, you can:
 
 You can customize the active learning process, including target function, acquisition function, size of batch candidate samples, and experiment settings.
 
+## To-do list
+
+- [ ] Config files
+- [ ] Parallel pf computation
+- [ ] Separate active learning modules
+- [x] Implemented MO selection
+
 ## Installation
 
 TBD
