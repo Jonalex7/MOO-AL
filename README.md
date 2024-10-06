@@ -1,19 +1,27 @@
 
-# Batch Active Learning with GP Regressor
+# Batch Active Learning for Structural Reliability
 
-Repository to run (`main_batchactive.py`) that trains a Gaussian Process Regressor using batch active learning. The script offers various options for customizing the active learning process, including the target function, acquisition function, size of batch candidate samples, and experiment settings.
+In this repository, you can:
+
+- Train a GP-based surrogate model through batch active learning. 
+
+You can customize the active learning process, including target function, acquisition function, size of batch candidate samples, and experiment settings.
+
+## Installation
+
+TBD
 
 ## Usage
 
-To run the script, use the following format:
+To run experiments, run:
 
-```bash
+```python
 python main_batchactive.py [-h] [--ls [LS]] [--al_f [AL_F]] [--al_b [AL_B]] [--seed [SEED]] [--n_exp [N_EXP]]
 ```
 ## Arguments
 * `-h, --help` 
 
-  Show the help message with the available arguments.
+  Shows a message listing the available arguments.
 
 * ` --ls [LS]` 
   ### Target Limit State [LS]
