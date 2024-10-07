@@ -1,4 +1,4 @@
-from datetime import datetime
+import datetime
 import pickle
 import os
 import argparse
@@ -38,18 +38,19 @@ with open(config_file, "r") as file:
     config = yaml.safe_load(file)
 
 # getting args from config file
-casestudy = config['case_study'] #= args.ls
-al_strategy = config['al_strategy']  #= args.al_f
-al_batch = config['al_batch'] #= args.al_b
-doe = config['doe'] #= 10     # initial DoE with LHS
-budget = config['budget'] #= 50  # max number of samples
-n_mcs_pool = config['n_mcs_pool'] #= 1e6  # n_MonteCarlo pool of samples for learning
-n_mcs_pf = config['n_mcs_pf']  #= 1e6  # n_MonteCarlo pool of samples for pf estimation
-seed = config['seed']
-save_interval = config['save_interval'] #= 10
+casestudy = config['case_study'] 
+al_strategy = config['al_strategy']  
+al_batch = config['al_batch'] 
+doe = config['doe'] # initial DoE with LHS
+budget = config['budget'] # max number of samples
+n_mcs_pool = config['n_mcs_pool'] # n_MonteCarlo pool of samples for learning
+n_mcs_pf = config['n_mcs_pf']  # n_MonteCarlo pool of samples for pf estimation
+seed = config['seed'] # seed for experiment
+save_interval = config['save_interval'] 
 
 name_exp = args.output
 iterations = int((budget-doe)/al_batch) + 1 #iteration to complete the available budget-doe
+
 # Loading limit state anf ref. Pf
 lstate = ls_REGISTRY[casestudy]()
 Pf_ref = lstate.target_pf
@@ -57,7 +58,7 @@ B_ref = - norm.ppf(Pf_ref)
 b_j = 0
 
 #results directory
-date_time_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+date_time_stamp = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
 results_dir = f'results/{casestudy}/{al_strategy}_{al_batch}_{name_exp}_{date_time_stamp}/'
 store_model_dir = results_dir + 'model/'
 
@@ -87,8 +88,7 @@ with open(results_dir + 'config.json', 'w') as file_id:
 print(f'Experiment settings: {config}')
 #-----------------------------------------------------------------------------------------------
 # log to wanb
-# run_name = f'{casestudy}_{al_strategy}_{al_batch}_{name_exp}' # Bit redundant TBD
-run_name = f'{name_exp}'
+run_name = f'{name_exp}_{date_time_stamp}'
 wandb.init(project='Batch_AL', mode="offline", name=run_name, config=config)
 #-----------------------------------------------------------------------------------------------
 # Design of experiments
@@ -101,9 +101,6 @@ start_time = time.time()
 
 # Active learning loop
 for it in range(iterations + 1):
-    # Find the minimum and maximum distance between training samples
-    # min_distance, max_distance = min_max_distance(x_train_norm, x_train_norm)
-    # kernel = 1.0 * Matern(length_scale=1.0, length_scale_bounds=(min_distance, 1e3), nu=1.5)
     
     print(f'Training size: {len(x_train_norm)} samples', end=" ")
     wandb.log({"train_size": len(x_train_norm)}, step=it)
@@ -156,7 +153,6 @@ for it in range(iterations + 1):
     }
     # Select_indices method with the chosen active learning strategy
     selected_indices = active_learning.select_indices(al_strategy, **args_al)
-    # print('Selected idx: ', selected_indices)
 
     # Get training and target samples
     selected_samples_norm = x_mc_pool[selected_indices]
@@ -170,7 +166,6 @@ for it in range(iterations + 1):
     y_train = torch.cat((y_train, selected_outputs))
 
     #saving partial results
-    # results_file['model'] = model_gp  
     results_file['Pf_model'] = pf_evol
 
     if it % save_interval == 0:
