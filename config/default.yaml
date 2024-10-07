@@ -5,7 +5,7 @@ al_batch: 3   # batch sample size per iteration
 budget: 200   # max number of samples
 doe: 10     # initial DoE with LHS
 n_mcs_pool: 1000000  # size of MonteCarlo pool candidates
-seed: null # null to read as None [391252418, 90523161, 375021598, 221860729, 45301975, 289396467, 698737664, 70359637, 800466323, 316421878]
+seed: None # None by default [391252418, 90523161, 375021598, 221860729, 45301975, 289396467, 698737664, 70359637, 800466323, 316421878]
 
 # --- reliability estimation---
 n_mcs_pf: 1000000 # size of MonteCarlo sampling for pf estimation
