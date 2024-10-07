@@ -44,19 +44,3 @@ def isoprobabilistic_transform(x, source_marginals, target_marginals):
         return transformed_x.squeeze()
     else:
         return transformed_x
-
-def min_max_distance(tensor1, tensor2):
-    # both tensors are of the same dimensionality
-    # assert tensor1.shape[1] == tensor2.shape[1]
-    
-    # Calculate the pairwise Euclidean distances
-    distances = torch.cdist(tensor1, tensor2, p=2)  # p=2 computes the Euclidean distance
-    # Flatten the distance matrix and filter out zero distances
-    flattened_distances = distances.flatten()
-    
-    # Find the minimum non-zero distance
-    min_distance = flattened_distances[flattened_distances > 1e-3].min()
-    # Find the maximum distance
-    max_distance = distances.max()
-    
-    return min_distance.item(), max_distance.item()

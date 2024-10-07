@@ -16,7 +16,7 @@ from scipy.optimize import fmin_l_bfgs_b
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import BatchActiveLearning
-from utils.data import min_max_distance, isoprobabilistic_transform
+from utils.data import isoprobabilistic_transform
 
 #-----------------------------------------------------------------------------------------------
 def custom_optimizer(obj_func, initial_theta, bounds):
