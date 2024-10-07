@@ -1,67 +1,60 @@
-import torch
-import numpy as np
 from datetime import datetime
 import pickle
 import os
 import argparse
 import json
+import time
+
+import torch
+import numpy as np
+import yaml
+import wandb
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
 from scipy.stats import norm
 from scipy.optimize import fmin_l_bfgs_b
-
-import wandb
-import time
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import BatchActiveLearning
 from utils.data import min_max_distance, isoprobabilistic_transform
 
 #-----------------------------------------------------------------------------------------------
+def custom_optimizer(obj_func, initial_theta, bounds):
+    opt_res = fmin_l_bfgs_b(obj_func, initial_theta, bounds=bounds, maxiter=1000)
+    return opt_res[0], opt_res[1]
+
 #arguments parser
 parser = argparse.ArgumentParser(description='GP Regressor trained with batch active learning')
-
-parser.add_argument('--ls', type=str, nargs='?', action='store', default='four_branch',
-                    help='Specify target LS: four_branch, himmelblau, pushover_frame. Def: four_branch')
-
-parser.add_argument('--al_f', type=str, nargs='?', action='store', default='u_function',
-                    help='Specify the acquisition function: corr_det, corr_eigen, corr_entropy, corr_condvar, u_function, random. Def: u_function')
-
-parser.add_argument('--al_b', type=int, nargs='?', action='store', default=3,
-                    help='Specify the batch sample size per iteration. Def: 3.')
-
-parser.add_argument('--seed', type=int, nargs='?', action='store', default=None,
-                    help='Specify the random seed. Def: Random')
-
-parser.add_argument('--n_exp', type=int, nargs='?', action='store', default=1,
-                    help='Specify the number of experiments to run. Def: 1')
-
+parser.add_argument('--config', type=str, nargs='?', action='store', default='default',
+                    help='Configuration file name in config/ Def: default')
+parser.add_argument('--output', type=str, nargs='?', action='store', default='out',
+                    help='Custom output file name Def: out')
 args = parser.parse_args()
 
-#-----------------------------------------------------------------------------------------------
-# Loading limit state
-lstate = ls_REGISTRY[args.ls]()
-#-----------------------------------------------------------------------------------------------
 # Loading experiment setting 
-config={}
-casestudy = config['case_study'] = args.ls
-al_strategy = config['al_strategy'] = args.al_f
-al_batch = config['al_batch'] = args.al_b
-doe = config['doe'] = 10     # initial DoE with LHS
-budget = config['budget'] = 200  # max number of samples
-n_mcs_pool = config['n_mcs_pool'] = 1e6  # n_MonteCarlo pool of samples for learning
-n_mcs_pf = config['n_mcs_pf']  = 1e6  # n_MonteCarlo pool of samples for pf estimation
-n_exp = config['n_exp'] = args.n_exp
-name_exp = config['name_exp'] = 'out'
-save_interval = config['save_interval'] = 10
-iterations = int((budget-doe)/args.al_b) + 1 #iteration to complete the available budget-doe
+config_file = "config/" + args.config + ".yaml"
 
+with open(config_file, "r") as file:
+    config = yaml.safe_load(file)
+
+# getting args from config file
+casestudy = config['case_study'] #= args.ls
+al_strategy = config['al_strategy']  #= args.al_f
+al_batch = config['al_batch'] #= args.al_b
+doe = config['doe'] #= 10     # initial DoE with LHS
+budget = config['budget'] #= 50  # max number of samples
+n_mcs_pool = config['n_mcs_pool'] #= 1e6  # n_MonteCarlo pool of samples for learning
+n_mcs_pf = config['n_mcs_pf']  #= 1e6  # n_MonteCarlo pool of samples for pf estimation
+seed = config['seed']
+save_interval = config['save_interval'] #= 10
+
+name_exp = args.output
+iterations = int((budget-doe)/al_batch) + 1 #iteration to complete the available budget-doe
+# Loading limit state anf ref. Pf
+lstate = ls_REGISTRY[casestudy]()
 Pf_ref = lstate.target_pf
 B_ref = - norm.ppf(Pf_ref)
 b_j = 0
-
-# Default seeds
-# seeds_exp= [391252418, 90523161, 375021598, 221860729, 45301975, 289396467, 698737664, 70359637, 800466323, 316421878]
 
 #results directory
 date_time_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -71,20 +64,14 @@ store_model_dir = results_dir + 'model/'
 for dir_path in [results_dir, store_model_dir]:
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
-
-print(f'Experiment settings: {config}')
-
-def custom_optimizer(obj_func, initial_theta, bounds):
-    opt_res = fmin_l_bfgs_b(obj_func, initial_theta, bounds=bounds, maxiter=1000)
-    return opt_res[0], opt_res[1]
-
+        
 #results
 results_file = {}
 pf_evol = []
 
 #experiment seed for reproducibility
-if args.seed is not None:
-    seed_exp = args.seed
+if seed is not None:
+    seed_exp = seed
 else:
     seed_exp = np.random.randint(0, 2**30 - 1)
 
@@ -97,16 +84,18 @@ config['seed'] = seed_exp
 with open(results_dir + 'config.json', 'w') as file_id:
     json.dump(config, file_id, indent=4)
 
+print(f'Experiment settings: {config}')
 #-----------------------------------------------------------------------------------------------
 # log to wanb
-run_name = f'{casestudy}_{al_strategy}_{al_batch}_{name_exp}' # Bit redundant TBD
+# run_name = f'{casestudy}_{al_strategy}_{al_batch}_{name_exp}' # Bit redundant TBD
+run_name = f'{name_exp}'
 wandb.init(project='Batch_AL', mode="offline", name=run_name, config=config)
 #-----------------------------------------------------------------------------------------------
 # Design of experiments
 x_train_norm, _ , y_train = lstate.get_doe(n_samples=doe, method='lhs', random_state=random_state)
 
 # Loading active learning methods
-active_learning = BatchActiveLearning(n_active_samples= args.al_b)
+active_learning = BatchActiveLearning(n_active_samples= al_batch)
 
 start_time = time.time()
 
@@ -192,11 +181,10 @@ for it in range(iterations + 1):
         with open(store_model_dir + 'gp_' + str(it) + '.pkl', 'wb') as file_id:
             pickle.dump(model_gp, file_id)
 
-
 #saving final results
 # results_file['model'] = model_gp  
 results_file['Pf_model'] = pf_evol
-results_file['training_samples'] = x_train_norm, y_train  #training samples
+results_file['training_samples'] = x_train_norm.tolist(), y_train.tolist()  #training samples
 
 with open(results_dir + 'output.json', 'w') as file_id:
                 json.dump(results_file, file_id, indent=4)
