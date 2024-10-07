@@ -32,7 +32,7 @@ def main(config, name_exp):
     budget = config['budget'] # max number of samples
     n_mcs_pool = config['n_mcs_pool'] # n_MonteCarlo pool of samples for learning
     n_mcs_pf = config['n_mcs_pf']  # n_MonteCarlo pool of samples for pf estimation
-    seed = config['seed'] # seed for experiment
+    seed_exp = config['seed'] # seed for experiment
     save_interval = config['save_interval'] 
 
     # Loading limit state and ref. Pf
@@ -56,8 +56,9 @@ def main(config, name_exp):
     stop_crit = []
 
     # experiment seed for reproducibility
-    if seed == "None":
+    if seed_exp == "None":
         seed_exp = np.random.randint(0, 2**30 - 1)
+
     np.random.seed(seed_exp)
     torch.manual_seed(seed_exp)
     random_state = np.random.RandomState(seed_exp)
