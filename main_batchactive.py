@@ -145,7 +145,10 @@ def main(config, name_exp):
         selected_outputs = lstate.eval_lstate(selected_samples)
 
         # Update the training set
-        x_train_norm = torch.cat((x_train_norm, torch.tensor(selected_samples_norm)), 0)
+        selected_samples_torch = torch.tensor(selected_samples_norm)
+        if selected_samples_torch.dim() == 1:
+            selected_samples_torch = selected_samples_torch.unsqueeze(0)
+        x_train_norm = torch.cat((x_train_norm, selected_samples_torch), 0)
         y_train = torch.cat((y_train, selected_outputs))
 
         #saving partial results
@@ -182,13 +185,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='GP Regressor trained with batch active learning')
     parser.add_argument('--config', type=str, nargs='?', action='store', default='default',
                         help='Configuration file name in config/ Def: default')
-    parser.add_argument('--output', type=str, nargs='?', action='store', default='out',
-                        help='Custom output file name Def: out')
+    parser.add_argument('--output', type=str, nargs='?', action='store', default='1',
+                        help='Custom output file name Def: 1')
     args = parser.parse_args()
+
+    name_exp = args.output # This can be used to define the experiment number
 
     # Loading experiment setting from config
     config_file = "config/" + args.config + ".yaml"
     with open(config_file, "r") as file:
         config = yaml.safe_load(file)
     
-    main(config=config, name_exp=args.output)
+    main(config=config, name_exp=name_exp)
