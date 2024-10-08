@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from scipy.stats import norm, uniform, lognorm
 import scipy.stats as stats
+from scipy.optimize import fmin_l_bfgs_b
 
 def isoprobabilistic_transform(x, source_marginals, target_marginals):
     if not isinstance(x, torch.Tensor):
@@ -44,3 +45,7 @@ def isoprobabilistic_transform(x, source_marginals, target_marginals):
         return transformed_x.squeeze()
     else:
         return transformed_x
+
+def custom_optimizer(obj_func, initial_theta, bounds):
+    opt_res = fmin_l_bfgs_b(obj_func, initial_theta, bounds=bounds, maxiter=1000)
+    return opt_res[0], opt_res[1]

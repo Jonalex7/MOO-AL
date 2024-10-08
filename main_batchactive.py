@@ -12,16 +12,10 @@ import wandb
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
 from scipy.stats import norm
-from scipy.optimize import fmin_l_bfgs_b
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import BatchActiveLearning
-from utils.data import isoprobabilistic_transform
-
-#-----------------------------------------------------------------------------------------------
-def custom_optimizer(obj_func, initial_theta, bounds):
-    opt_res = fmin_l_bfgs_b(obj_func, initial_theta, bounds=bounds, maxiter=1000)
-    return opt_res[0], opt_res[1]
+from utils.data import isoprobabilistic_transform, custom_optimizer
 
 def main(config, name_exp):
     # getting args from config file
