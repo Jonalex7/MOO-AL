@@ -14,7 +14,8 @@ class BatchActiveLearning():
             'corr_eigen': (self.get_corr_eigen, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
             'corr_entropy': (self.get_corr_entropy, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
             'corr_condvar': (self.get_corr_condvar, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
-            'random': (self.get_random, ['x_mc_pool'])
+            'random': (self.get_random, ['x_mc_pool']),
+            'mo': (self.get_mo_function, ['mean_prediction', 'std_prediction']),
         }
 
     def select_indices(self, al_strategy, **kwargs):
@@ -73,6 +74,63 @@ class BatchActiveLearning():
         _, u_idx = u_function.squeeze().topk(act_samples, largest=False)
         selected_indices = u_idx.tolist()
         return selected_indices
+    
+    def get_mo_function(self, mean_prediction, std_prediction, samples=None):
+
+        _, _, _, original_knee_index = self.compute_pareto_front(torch.abs(mean_prediction), std_prediction)
+
+        selected_indices = original_knee_index.tolist()
+        return selected_indices
+    
+    def compute_pareto_front(self, mean_pred: torch.Tensor, std_pred: torch.Tensor):
+        # Negate mean_pred since we want to minimize it while using maximization logic
+        objectives = torch.stack([-mean_pred, std_pred], dim=1)
+        
+        # Create a mask to track Pareto efficiency
+        is_pareto_efficient = torch.ones(objectives.size(0), dtype=torch.bool)
+
+        # Loop through all points and check if each is Pareto efficient
+        for i, point in enumerate(objectives):
+            # A point is Pareto efficient if no other point dominates it
+            if is_pareto_efficient[i]:
+                # Mark dominated points as not Pareto efficient
+                is_dominated = torch.all(objectives <= point, dim=1) & torch.any(objectives < point, dim=1)
+                is_pareto_efficient[is_dominated] = False
+
+        # Extract the Pareto front points and their original indices
+        pareto_front_indices = torch.nonzero(is_pareto_efficient, as_tuple=False).squeeze()
+        pareto_front = objectives[is_pareto_efficient]
+        
+        # Sort the Pareto front by mean_pred (ascending) for knee point calculation
+        sorted_indices = pareto_front[:, 0].argsort()
+        pareto_front = pareto_front[sorted_indices]
+        pareto_front_indices = pareto_front_indices[sorted_indices]
+
+        # Calculate the knee point using the needle method
+        knee_point, knee_index = self.calculate_knee_point(pareto_front)
+        original_knee_index = pareto_front_indices[knee_index]
+        
+        return pareto_front, is_pareto_efficient, knee_point, original_knee_index
+
+    def calculate_knee_point(self, pareto_front: torch.Tensor):
+        # Define the line between the first and last point in the Pareto front
+        p1, p2 = pareto_front[0], pareto_front[-1]
+        line_vec = p2 - p1
+        line_vec /= torch.norm(line_vec)
+
+        # Calculate the distance of each point on the Pareto front from the line
+        distances = torch.zeros(pareto_front.size(0))
+        for i, point in enumerate(pareto_front):
+            point_vec = point - p1
+            proj_len = torch.dot(point_vec, line_vec)
+            proj_point = p1 + proj_len * line_vec
+            distances[i] = torch.norm(point - proj_point)
+
+        # The knee point is the point with the maximum distance from the line
+        knee_index = torch.argmax(distances)
+        knee_point = pareto_front[knee_index]
+        
+        return knee_point, knee_index
 
     def get_correlation(self, x_mc, model, mean_prediction, std_prediction, samples=None):
         if samples is None:

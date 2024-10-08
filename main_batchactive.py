@@ -24,11 +24,11 @@ parser = argparse.ArgumentParser(description='GP Regressor trained with batch ac
 parser.add_argument('--ls', type=str, nargs='?', action='store', default='four_branch',
                     help='Specify target LS: four_branch, himmelblau, pushover_frame. Def: four_branch')
 
-parser.add_argument('--al_f', type=str, nargs='?', action='store', default='u_function',
+parser.add_argument('--al_f', type=str, nargs='?', action='store', default='mo',
                     help='Specify the acquisition function: corr_det, corr_eigen, corr_entropy, corr_condvar, u_function, random. Def: u_function')
 
-parser.add_argument('--al_b', type=int, nargs='?', action='store', default=3,
-                    help='Specify the batch sample size per iteration. Def: 3.')
+parser.add_argument('--al_b', type=int, nargs='?', action='store', default=1,
+                    help='Specify the batch sample size per iteration. Def: 1.')
 
 parser.add_argument('--seed', type=int, nargs='?', action='store', default=None,
                     help='Specify the random seed. Def: Random')
@@ -50,10 +50,10 @@ al_batch = config['al_batch'] = args.al_b
 doe = config['doe'] = 10     # initial DoE with LHS
 budget = config['budget'] = 200  # max number of samples
 n_mcs_pool = config['n_mcs_pool'] = 1e6  # n_MonteCarlo pool of samples for learning
-n_mcs_pf = config['n_mcs_pf']  = 1e6  # n_MonteCarlo pool of samples for pf estimation
+n_mcs_pf = config['n_mcs_pf']  = 1e7  # n_MonteCarlo pool of samples for pf estimation
 n_exp = config['n_exp'] = args.n_exp
-name_exp = config['name_exp'] = 'out'
-save_interval = config['save_interval'] = 10
+name_exp = config['name_exp'] = '1' # This can be used to define the experiment number
+save_interval = config['save_interval'] = 25
 iterations = int((budget-doe)/args.al_b) + 1 #iteration to complete the available budget-doe
 
 Pf_ref = lstate.target_pf
@@ -177,7 +177,10 @@ for it in range(iterations + 1):
     selected_outputs = lstate.eval_lstate(selected_samples)
 
     # Update the training set
-    x_train_norm = torch.cat((x_train_norm, torch.tensor(selected_samples_norm)), 0)
+    selected_samples_torch = torch.tensor(selected_samples_norm)
+    if selected_samples_torch.dim() == 1:
+        selected_samples_torch = selected_samples_torch.unsqueeze(0)
+    x_train_norm = torch.cat((x_train_norm, selected_samples_torch), 0)
     y_train = torch.cat((y_train, selected_outputs))
 
     #saving partial results
