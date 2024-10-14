@@ -23,9 +23,9 @@ TBD
 To run experiments, run:
 
 ```python
-python main_batchactive.py [-h] [--ls [LS]] [--al_f [AL_F]] [--al_b [AL_B]] [--seed [SEED]] [--n_exp [N_EXP]]
+python main_batchactive.py [-h] [--config [config file]] [--output [output file name]]
 ```
-## Arguments
+<!-- ## Arguments
 * `-h, --help` 
 
   Shows a message listing the available arguments.
@@ -66,4 +66,4 @@ python main_batchactive.py [-h] [--ls [LS]] [--al_f [AL_F]] [--al_b [AL_B]] [--s
 
 * `--n_exp [N_EXP]`
   ### Number of Experiments [N_EXP]
-  Sets the number of experiments to run under the given settings `int`.  Default is 1.
+  Sets the number of experiments to run under the given settings `int`.  Default is 1. -->
