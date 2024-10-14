@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from scipy.stats import norm
 from joblib import Parallel, delayed
 
 class BatchActiveLearning():
@@ -16,6 +17,7 @@ class BatchActiveLearning():
             'corr_condvar': (self.get_corr_condvar, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
             'random': (self.get_random, ['x_mc_pool']),
             'mo': (self.get_mo_function, ['mean_prediction', 'std_prediction']),
+            'eff': (self.get_eff_function, ['mean_prediction', 'std_prediction']),
         }
 
     def select_indices(self, al_strategy, **kwargs):
@@ -74,7 +76,30 @@ class BatchActiveLearning():
         _, u_idx = u_function.squeeze().topk(act_samples, largest=False)
         selected_indices = u_idx.tolist()
         return selected_indices
-    
+
+    def get_eff_function(self, mean_prediction, std_prediction, samples=None):
+
+        if samples is None:
+            act_samples = self.n_active_samples
+        else:
+            act_samples = samples
+            
+        eps = 2 * std_prediction
+
+        # Compute each component using scipy's norm functions
+        eff = (mean_prediction * (2 * norm.cdf(-mean_prediction / std_prediction) 
+                    - norm.cdf(-(eps + mean_prediction) / std_prediction)
+                    - norm.cdf((eps - mean_prediction) / std_prediction))
+            - std_prediction * (2 * norm.pdf(-mean_prediction / std_prediction)
+                        - norm.pdf(-(eps + mean_prediction) / std_prediction)
+                        - norm.pdf((eps - mean_prediction) / std_prediction))
+            + eps * (norm.cdf((eps - mean_prediction) / std_prediction)
+                    - norm.cdf((-eps - mean_prediction) / std_prediction)))
+        
+        _, eff_idx = eff.squeeze().topk(act_samples)
+        selected_indices = eff_idx.tolist()
+        return selected_indices
+
     def get_mo_function(self, mean_prediction, std_prediction, samples=None):
 
         _, _, _, original_knee_index = self.compute_pareto_front(torch.abs(mean_prediction), std_prediction)
