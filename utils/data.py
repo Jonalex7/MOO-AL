@@ -18,8 +18,10 @@ def isoprobabilistic_transform(x, source_marginals, target_marginals):
         
         # Define source distribution
         if dist_source == 'lognorm':
-            shape_source = scale_source / loc_source  # Shape parameter for lognorm
-            dist_source = stats.lognorm(s=shape_source, loc=0, scale=loc_source)
+            # Compute mu and sigma for source lognormal distribution
+            mu_source = np.log(loc_source**2 / np.sqrt(loc_source**2 + scale_source**2))
+            sigma_source = np.sqrt(np.log(1 + (scale_source / loc_source)**2))
+            dist_source = stats.lognorm(s=sigma_source, scale=np.exp(mu_source))  # lognorm takes sigma and exp(mu)
         elif dist_source == 'uniform':
             dist_source = stats.uniform(loc=loc_source, scale=scale_source)
         else:
@@ -27,8 +29,10 @@ def isoprobabilistic_transform(x, source_marginals, target_marginals):
 
         # Define target distribution
         if dist_target == 'lognorm':
-            shape_target = scale_target / loc_target  # Shape parameter for lognorm
-            dist_target = stats.lognorm(s=shape_target, loc=0, scale=loc_target)
+            # Compute mu and sigma for target lognormal distribution
+            mu_target = np.log(loc_target**2 / np.sqrt(loc_target**2 + scale_target**2))
+            sigma_target = np.sqrt(np.log(1 + (scale_target / loc_target)**2))
+            dist_target = stats.lognorm(s=sigma_target, scale=np.exp(mu_target))
         elif dist_target == 'uniform':
             dist_target = stats.uniform(loc=loc_target, scale=scale_target)
         else:
