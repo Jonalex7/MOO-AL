@@ -1,0 +1,14 @@
+# --- active training options ---
+case_study: 'four_branch' # Specify target LS: four_branch, himmelblau, pushover_frame
+al_strategy: 'mo'    #corr_det, corr_eigen, corr_entropy, corr_condvar, u_function, random
+al_batch: 1   # batch sample size per iteration
+budget: 50   # max number of samples
+doe: 10     # initial DoE with LHS
+n_mcs_pool: 1000000  # size of MonteCarlo pool candidates
+seed: None # None by default [391252418, 90523161, 375021598, 221860729, 45301975, 289396467, 698737664, 70359637, 800466323, 316421878]
+
+# --- reliability estimation---
+n_mcs_pf: 1000000 # size of MonteCarlo sampling for pf estimation
+
+#--- output model----
+save_interval: 10
