@@ -3,6 +3,7 @@ import numpy as np
 from scipy.stats import norm, uniform, lognorm
 import scipy.stats as stats
 from scipy.optimize import fmin_l_bfgs_b
+from joblib import Parallel, delayed
 
 def isoprobabilistic_transform(x, source_marginals, target_marginals):
     if not isinstance(x, torch.Tensor):
@@ -53,3 +54,25 @@ def isoprobabilistic_transform(x, source_marginals, target_marginals):
 def custom_optimizer(obj_func, initial_theta, bounds):
     opt_res = fmin_l_bfgs_b(obj_func, initial_theta, bounds=bounds, maxiter=1000)
     return opt_res[0], opt_res[1]
+
+# Function to make predictions over a batch of samples
+def predict_batch(model, x_batch):
+    return model.predict(x_batch, return_std=True)
+
+# Splitting x_mc_pool into smaller chunks
+def parallel_predict(model_gp, x_mc_pool, n_jobs=-1):
+    batch_size = 10000  # Adjust batch size based on your system memory to avoid overflow
+    n_batches = int(np.ceil(x_mc_pool.shape[0] / batch_size))
+    
+    # Split into batches
+    batches = [x_mc_pool[i * batch_size: (i + 1) * batch_size] for i in range(n_batches)]
+    
+    # Parallel predictions using joblib
+    results = Parallel(n_jobs=n_jobs)(delayed(predict_batch)(model_gp, batch) for batch in batches)
+
+    # Combining results
+    means, stds = zip(*results)
+    mean_prediction = np.concatenate(means, axis=0)
+    std_prediction = np.concatenate(stds, axis=0)
+
+    return torch.tensor(mean_prediction), torch.tensor(std_prediction)
