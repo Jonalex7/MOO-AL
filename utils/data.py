@@ -36,7 +36,8 @@ def isoprobabilistic_transform(x, source_marginals, target_marginals):
             sigma_target = np.sqrt(np.log(1 + (scale_target / loc_target)**2))
             dist_target = stats.lognorm(s=sigma_target, scale=np.exp(mu_target))
         elif dist_target == 'uniform':
-            dist_target = stats.uniform(loc=loc_target, scale=scale_target)
+            # Correct the scale for the uniform distribution
+            dist_target = stats.uniform(loc=loc_target, scale=scale_target - loc_target)  # scale is upper bound - lower bound
         else:
             dist_target = getattr(stats, dist_target)(loc=loc_target, scale=scale_target)
 
