@@ -10,7 +10,7 @@ You can customize the active learning process, including target function, acquis
 ## To-do list
 
 - [x] Config files
-- [ ] Parallel pf computation
+- [x] Parallel pf computation
 - [ ] Separate active learning modules
 - [x] Implemented MO selection
 

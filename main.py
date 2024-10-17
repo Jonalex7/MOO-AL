@@ -15,7 +15,7 @@ from scipy.stats import norm
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import BatchActiveLearning
-from utils.data import isoprobabilistic_transform, custom_optimizer
+from utils.data import isoprobabilistic_transform, custom_optimizer, parallel_predict
 
 def main(config, name_exp):
     # getting args from config file
@@ -75,7 +75,7 @@ def main(config, name_exp):
     iterations = int((budget-doe)/al_batch) + 1 #iteration to complete the available budget-doe
 
     start_time = time.time()
-
+    counter = 0
     # Active learning loop
     for it in range(iterations + 1):
         
@@ -89,17 +89,24 @@ def main(config, name_exp):
 
         # Pf estimation with MCs
         x_mcs_pf = np.random.normal(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
-        mean_pf = model_gp.predict(x_mcs_pf, return_std=False)
-        Pf_model = np.sum(mean_pf < 0) / len(mean_pf)
+        # mean_pf = model_gp.predict(x_mcs_pf, return_std=False)
+        mean_pf, std_pf = parallel_predict(model_gp, x_mcs_pf)
+        Pf_model = (torch.sum(mean_pf < 0) / len(mean_pf)).item()
         pf_evol.append(Pf_model)
 
-        # reliability index 
+        # reliability index, B
         B_model = - norm.ppf(Pf_model)
         B_rel_diff = (B_model-B_ref)/B_ref
-        
+
+        # B bounds
+        Pf_plus = (torch.sum(mean_pf+2*std_pf < 0) / len(mean_pf)).item()
+        Pf_minus = (torch.sum(mean_pf-2*std_pf < 0) / len(mean_pf)).item()
+        B_bound = np.abs( (- norm.ppf(Pf_plus)) - (- norm.ppf(Pf_minus)) ) / B_model
+
         # check beta stability
         b_stab = np.abs(B_model - b_j) / B_model   #should be less than 0.005
-        print(f'Pf_ref: {Pf_ref:.3E}, Pf_model: {Pf_model.item():.3E}, B_rel_diff: {B_rel_diff.item():.1%}, B_stab: {b_stab:.1%} \n')
+        
+        print(f'Pf_ref: {Pf_ref:.3E}, Pf_model: {Pf_model:.3E}, B_rel_diff: {B_rel_diff.item():.1%}, B_stab: {b_stab:.1%}, eps-bb: {B_bound:.3E} \n')
         wandb.log({"pf_ref":Pf_ref, "pf_model": Pf_model, "b_rel": B_rel_diff, "b_stab": b_stab}, step=it)
 
         # Check if b_stab is smaller than 0.005
@@ -117,9 +124,8 @@ def main(config, name_exp):
         
         # Making predictions of mean and std for mc population 
         x_mc_pool = np.random.normal(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
-        mean_prediction, std_prediction = model_gp.predict(x_mc_pool, return_std=True)
-        mean_pred = torch.tensor(mean_prediction)
-        std_pred = torch.tensor(std_prediction)
+        # mean_prediction, std_prediction = model_gp.predict(x_mc_pool, return_std=True)
+        mean_pred, std_pred = parallel_predict(model_gp, x_mc_pool)
 
         # Define the arguments for active learning
         args_al= {
