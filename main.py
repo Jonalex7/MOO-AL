@@ -50,7 +50,7 @@ def main(config, name_exp):
     stop_crit = []
 
     # experiment seed for reproducibility
-    if seed_exp == "None":
+    if seed_exp == -1:
         seed_exp = np.random.randint(0, 2**30 - 1)
 
     np.random.seed(seed_exp)
@@ -182,18 +182,37 @@ def main(config, name_exp):
     print(f"Active learning completed in: {(execution_time/60):.2f} mins")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='GP Regressor trained with batch active learning')
+    parser = argparse.ArgumentParser(description='GP Regressor trained with M.O. batch active learning for structural reliability')
     parser.add_argument('--config', type=str, nargs='?', action='store', default='default',
                         help='Configuration file name in config/ Def: default')
     parser.add_argument('--output', type=str, nargs='?', action='store', default='1',
                         help='Custom output file name Def: 1')
-    args = parser.parse_args()
-
+    
+    # Parse known and unknown arguments
+    args, unknown = parser.parse_known_args()
     name_exp = args.output # This can be used to define the experiment number
 
     # Loading experiment setting from config
     config_file = "config/" + args.config + ".yaml"
     with open(config_file, "r") as file:
         config = yaml.safe_load(file)
-    
+
+    # Process unknown arguments to update the config
+    for i in range(0, len(unknown), 2):
+        key = unknown[i].lstrip('-').replace('-', '_')
+        value = unknown[i+1]
+
+        if key in config:
+            # Get the type from the config
+            config_type = type(config[key])
+            # Convert value to the correct type
+            if config_type == bool:
+                value = value.lower() in ('true', '1', 'yes')
+            else:
+                value = config_type(value)
+            config[key] = value
+        else:
+            print(f"Warning: Key '{key}' not found in config. Adding it as a new entry.")
+            config[key] = value  # Add new key-value pair
+
     main(config=config, name_exp=name_exp)
