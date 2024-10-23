@@ -105,7 +105,7 @@ class BatchActiveLearning():
         _, _, _, original_knee_index = self.compute_pareto_front(torch.abs(mean_prediction), std_prediction)
 
         selected_indices = original_knee_index.tolist()
-        return selected_indices
+        return [selected_indices]
     
     def compute_pareto_front(self, mean_pred: torch.Tensor, std_pred: torch.Tensor):
         # Negate mean_pred since we want to minimize it while using maximization logic
