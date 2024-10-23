@@ -10,7 +10,7 @@ class BatchActiveLearning():
 
         # Define the strategy mapping as a class attribute
         self.al_strategy_mapping = {
-            'u_function': (self.get_u_function, ['mean_prediction', 'std_prediction']),
+            'u': (self.get_u_function, ['mean_prediction', 'std_prediction']),
             'corr_det': (self.get_corr_det, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
             'corr_eigen': (self.get_corr_eigen, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
             'corr_entropy': (self.get_corr_entropy, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
