@@ -24,6 +24,11 @@ class g2d_himmelblau():
 
     def eval_lstate(self, x):
         x = np.array(x, dtype='f')
+        
+        n_dim = len(x.shape)
+        if n_dim == 1:
+            x = np.array(x)[np.newaxis]
+            
         beta = 95
         term1 = (((0.75*x[:,0] - 0.5)**2 / 1.81) + ((0.75*x[:,1] - 0.5) / 1.81) - 11)**2
         term2 = (((0.75*x[:,0] - 1.0)/ 1.81) + ((0.75*x[:,1] - 0.5)**2 / 1.81) - 7)**2
