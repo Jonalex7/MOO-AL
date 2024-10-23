@@ -23,7 +23,7 @@ from utils.data import isoprobabilistic_transform
                 Performance function value for each component.
             msg : str
                 Accompanying diagnostic message, e.g. warning."""
-class g2D_four_branch():
+class g2D_four_branch_6():
     def __init__(self):
         self.input_dim = 2
         self.output_dim = 1
