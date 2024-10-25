@@ -1,9 +1,9 @@
 # --- active training options ---
-case_study: 'four_branch_7' # Specify target LS: four_branch, himmelblau, pushover_frame, le_frame, hat, damped_oscillator, rp55 
+case_study: 'four_branch_6' # Specify target LS: four_branch_6, himmelblau, pushover_frame, le_frame, hat, damped_oscillator, rp55
 al_strategy: 'mo'    #mo, eff u_function, corr_det, corr_eigen, corr_entropy, corr_condvar, random
 al_batch: 1   # batch sample size per active iteration
 budget: 200   # max number of samples
-doe: 20     # initial DoE with LHS
+doe: 10     # initial DoE with LHS
 n_mcs_pool: 1000000  # size of MonteCarlo pool candidates
 seed: -1 # -1 for random seed (default)
 

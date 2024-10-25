@@ -1,39 +1,50 @@
 #!/bin/bash
 # Submission script for nic5
 #
-#SBATCH --job-name=BAL_fourbranch
-#SBATCH --time=30:00:00 # hh:mm:ss
-#SBATCH --array=0-3    # 8 combinations in total (1 * 1 * 4)
+#SBATCH --job-name=ALMO2D
+#SBATCH --time=40:00:00 # hh:mm:ss
+#SBATCH --array=0-179    # 12 combinations * 15 repetitions
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=10  # 10 cores 
-#SBATCH --mem=20G        # Memory to allocate per allocated CPU core
+#SBATCH --cpus-per-task=5  # 10 cores 
+#SBATCH --mem=10G        # Memory to allocate per allocated CPU core
 #SBATCH --partition=batch
-
-# Define arrays for the arguments
-# LS_OPTIONS=("four_branch" "himmelblau" "pushover_frame")
-LS_OPTIONS=("four_branch")
-#ACQ_F_OPTIONS=("corr_det" "corr_eigen" "corr_entropy" "corr_condvar" "u_function" )
-ACQ_F_OPTIONS=("corr_condvar")
-ACQ_B_OPTIONS=(3 5 7 10)
-
-# Calculate the total number of combinations
-TOTAL_COMBINATIONS=$(( ${#LS_OPTIONS[@]} * ${#ACQ_F_OPTIONS[@]} * ${#ACQ_B_OPTIONS[@]} ))
-
-# Get the combination based on SLURM_ARRAY_TASK_ID
-LS_INDEX=$(( SLURM_ARRAY_TASK_ID / ( ${#ACQ_F_OPTIONS[@]} * ${#ACQ_B_OPTIONS[@]} ) ))
-REMAINDER=$(( SLURM_ARRAY_TASK_ID % ( ${#ACQ_F_OPTIONS[@]} * ${#ACQ_B_OPTIONS[@]} ) ))
-ACQ_F_INDEX=$(( REMAINDER / ${#ACQ_B_OPTIONS[@]} ))
-ACQ_B_INDEX=$(( REMAINDER % ${#ACQ_B_OPTIONS[@]} ))
-
-# Get the values for each argument
-LS=${LS_OPTIONS[$LS_INDEX]}
-ACQ_F=${ACQ_F_OPTIONS[$ACQ_F_INDEX]}
-ACQ_B=${ACQ_B_OPTIONS[$ACQ_B_INDEX]}
-
 #SBATCH --mail-user=jmoran@uliege.be
 #SBATCH --mail-type=ALL
-export WANDB_API_KEY='92527d5edd061155ce7397976a5b564066fc78c2'
-wandb offline
+
+module load Python/3.9.6-GCCcore-11.2.0
 source env/bin/activate
+
+# Define arrays for the arguments
+CASE_STUDY_OPTIONS=("four_branch_6" "four_branch_7" "himmelblau" "hat")
+AL_STRATEGY_OPTIONS=("u" "eff" "mo")
+REPEATS=15  # Number of repetitions for each experiment setting
+
+# Calculate the number of options
+NUM_CASE_STUDY=${#CASE_STUDY_OPTIONS[@]}
+NUM_AL_STRATEGY=${#AL_STRATEGY_OPTIONS[@]}
+
+# Total combinations
+TOTAL_COMBINATIONS=$((NUM_CASE_STUDY * NUM_AL_STRATEGY))
+
+# Ensure SLURM_ARRAY_TASK_ID is set
+if [ -z "$SLURM_ARRAY_TASK_ID" ]; then
+    echo "Error: SLURM_ARRAY_TASK_ID is not set."
+    exit 1
+fi
+
+# Calculate indices
+idx_case_study=$(( SLURM_ARRAY_TASK_ID / (NUM_AL_STRATEGY * REPEATS) ))
+idx_al_strategy=$(( (SLURM_ARRAY_TASK_ID / REPEATS) % NUM_AL_STRATEGY ))
+repeat_num=$(( SLURM_ARRAY_TASK_ID % REPEATS ))
+
+# Assign argument values
+CASE_STUDY=${CASE_STUDY_OPTIONS[$idx_case_study]}
+AL_STRATEGY=${AL_STRATEGY_OPTIONS[$idx_al_strategy]}
+
+# Use the repetition number as the output number (starting from 1)
+OUTPUT_NUMBER=$((repeat_num + 1))
+
+echo "Running with --case_study=$CASE_STUDY --al_strategy=$AL_STRATEGY --output=$OUTPUT_NUMBER"
+wandb offline
 # Run the Python script with the selected arguments
-python main_batchactive.py --ls=$LS --al_f=$ACQ_F --al_b=$ACQ_B --n_exp=10
+python main.py --case_study "$CASE_STUDY" --al_strategy "$AL_STRATEGY" --output "$OUTPUT_NUMBER"
