@@ -37,6 +37,12 @@ class g_pushover():
         return max_baseshear_mc
 
     def eval_lstate(self, x):
+        
+        x = np.array(x, dtype='f')
+        n_dim = len(x.shape)
+        if n_dim == 1:
+            x = np.array(x)[np.newaxis]
+
         # Ref. Lateral loads
         lat2 = 16.255
         lat3 = 31.636
