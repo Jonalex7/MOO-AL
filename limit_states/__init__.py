@@ -1,4 +1,5 @@
-from .g2d_four_branch import g2D_four_branch
+from .g2d_four_branch_6 import g2D_four_branch_6
+from .g2d_four_branch_7 import g2D_four_branch_7
 from .g2d_hmcmc_himmelblau import g2d_himmelblau
 from .g8d_dampedoscillator import g8d_damped_oscillator
 from .g2d_hat import g2D_hat_function
@@ -8,7 +9,8 @@ from .g21d_le_frame import g21D_rp201
 
 REGISTRY = {}
 
-REGISTRY["four_branch"] = g2D_four_branch
+REGISTRY["four_branch_6"] = g2D_four_branch_6
+REGISTRY["four_branch_7"] = g2D_four_branch_7
 REGISTRY["himmelblau"] = g2d_himmelblau
 REGISTRY["damped_oscillator"] = g8d_damped_oscillator
 REGISTRY["hat"] = g2D_hat_function
