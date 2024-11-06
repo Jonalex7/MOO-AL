@@ -5,7 +5,7 @@ al_batch: 1   # batch sample size per active iteration
 budget: 200   # max number of samples
 doe: 10     # initial DoE with LHS
 n_mcs_pool: 1000000  # size of MonteCarlo pool candidates
-seed: -1 # -1 for random seed (default)
+seed: null # null for random seed (default)
 
 # --- reliability estimation---
 n_mcs_pf: 10000000 # size of MonteCarlo sampling for pf estimation

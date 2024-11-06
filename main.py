@@ -51,8 +51,10 @@ def main(config, name_exp):
     pareto_metrics = []
 
     # experiment seed for reproducibility
-    if seed_exp == -1:
+    if seed_exp is None:
         seed_exp = np.random.randint(0, 2**30 - 1)
+    else:
+        seed_exp=int(seed_exp)
 
     np.random.seed(seed_exp)
     torch.manual_seed(seed_exp)
@@ -227,11 +229,20 @@ if __name__ == "__main__":
         if key in config:
             # Get the type from the config
             config_type = type(config[key])
-            # Convert value to the correct type
-            if config_type == bool:
-                value = value.lower() in ('true', '1', 'yes')
+
+            # Check if 'null' or similar was provided; convert to None
+            if value.lower() in ('null', 'none'):
+                value = None
+            elif config[key] is not None:
+                # Convert to the correct type
+                if config_type == bool:
+                    value = value.lower() in ('true', '1', 'yes')
+                else:
+                    value = config_type(value)
             else:
-                value = config_type(value)
+                # Convert to integer if possible
+                value = int(value) if value.isdigit() else value
+
             config[key] = value
         else:
             print(f"Warning: Key '{key}' not found in config. Adding it as a new entry.")
