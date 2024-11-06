@@ -16,8 +16,9 @@ class BatchActiveLearning():
             'corr_entropy': (self.get_corr_entropy, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
             'corr_condvar': (self.get_corr_condvar, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
             'random': (self.get_random, ['x_mc_pool']),
-            'mo': (self.get_mo_function, ['mean_prediction', 'std_prediction']),
             'eff': (self.get_eff_function, ['mean_prediction', 'std_prediction']),
+            'knee': (self.get_mo_function, ['mean_prediction', 'std_prediction']),
+            'compromise': (self.get_mo_function, ['mean_prediction', 'std_prediction']),
         }
 
     def select_indices(self, al_strategy, **kwargs):
@@ -25,10 +26,16 @@ class BatchActiveLearning():
             method, required_args = self.al_strategy_mapping[al_strategy]
             # Extract the required arguments from kwargs
             args = [kwargs[arg] for arg in required_args]
-            return method(*args)
+            
+            # Specify the method parameter if needed for `get_mo_function`
+            if al_strategy in ['knee', 'compromise']:
+                method_name = 'knee' if al_strategy == 'knee' else 'compromise'
+                return method(*args, method=method_name)
+            else:
+                return method(*args)
         else:
             raise ValueError(f"Unknown active learning strategy: {al_strategy}")
-        
+            
     def calculate_determinant(self, x_mc, model, sample, selected_indices):
         x_assemble = x_mc[selected_indices + [sample]]
         _, cov_assemble = model.predict(x_assemble, return_std=False, return_cov=True)
@@ -100,11 +107,17 @@ class BatchActiveLearning():
         selected_indices = eff_idx.tolist()
         return selected_indices
 
-    def get_mo_function(self, mean_prediction, std_prediction, samples=None):
+    def get_mo_function(self, mean_prediction, std_prediction, method=None):
 
-        _, _, _, original_knee_index = self.compute_pareto_front(torch.abs(mean_prediction), std_prediction)
+        _, _, _, original_knee_index, _, original_compromised_index, _ = self.compute_pareto_front(torch.abs(mean_prediction), std_prediction)
 
-        selected_indices = original_knee_index.tolist()
+        if method == 'knee':
+            selected_indices = original_knee_index.tolist()
+        elif method == 'compromise':
+            selected_indices = original_compromised_index.tolist()
+        else:
+            raise ValueError(f"Unknown MO pareto strategy: {method}")
+        
         return [selected_indices]
     
     def compute_pareto_front(self, mean_pred: torch.Tensor, std_pred: torch.Tensor):
@@ -134,8 +147,13 @@ class BatchActiveLearning():
         # Calculate the knee point using the needle method
         knee_point, knee_index = self.calculate_knee_point(pareto_front)
         original_knee_index = pareto_front_indices[knee_index]
+
+
+        # Calculate the compromised point from the ideal(utopian) point
+        compromised_point, compromised_index, ideal_point = self.calculate_compromised_point(pareto_front)
+        original_compromised_index = pareto_front_indices[compromised_index]
         
-        return pareto_front, is_pareto_efficient, knee_point, original_knee_index
+        return pareto_front, is_pareto_efficient, knee_point, original_knee_index, compromised_point, original_compromised_index, ideal_point
 
     def calculate_knee_point(self, pareto_front: torch.Tensor):
         # Define the line between the first and last point in the Pareto front
@@ -157,6 +175,19 @@ class BatchActiveLearning():
         
         return knee_point, knee_index
 
+    def calculate_compromised_point(self, pareto_front: torch.Tensor):
+        # Define the ideal point based on the objective directions
+        ideal_point = torch.max(pareto_front, dim=0).values
+
+        # Calculate the Euclidean distance from each point on the Pareto front to the ideal point
+        distances = torch.norm(pareto_front - ideal_point, dim=1)
+        
+        # Find the index of the point with the minimum distance
+        compromised_index = torch.argmin(distances)
+        compromised_point = pareto_front[compromised_index]
+        
+        return compromised_point, compromised_index, ideal_point
+    
     def get_correlation(self, x_mc, model, mean_prediction, std_prediction, samples=None):
         if samples is None:
             act_samples = self.n_active_samples
