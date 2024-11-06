@@ -15,7 +15,7 @@ from scipy.stats import norm
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import BatchActiveLearning
-from utils.data import isoprobabilistic_transform, custom_optimizer, parallel_predict
+from utils.data import isoprobabilistic_transform, custom_optimizer, parallel_predict, distances_in_pareto, normalize_tensor
 
 def main(config, name_exp):
     # getting args from config file
@@ -48,6 +48,7 @@ def main(config, name_exp):
     results_file = {}
     pf_evol = []
     stop_crit = []
+    pareto_metrics = []
 
     # experiment seed for reproducibility
     if seed_exp == -1:
@@ -89,7 +90,6 @@ def main(config, name_exp):
 
         # Pf estimation with MCs
         x_mcs_pf = np.random.normal(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
-        # mean_pf = model_gp.predict(x_mcs_pf, return_std=False)
         mean_pf, std_pf = parallel_predict(model_gp, x_mcs_pf)
         Pf_model = (torch.sum(mean_pf < 0) / len(mean_pf)).item()
         pf_evol.append(Pf_model)
@@ -117,7 +117,7 @@ def main(config, name_exp):
 
         # Print 'stop' if b_stab is small for 3 consecutive iterations
         if counter >= 3:
-            print(f'Stop at {len(x_train_norm)} samples!')
+            # print(f'Stop at {len(x_train_norm)} samples!')
             stop_crit.append([len(x_train_norm), Pf_model, b_stab])
 
         b_j = B_model
@@ -134,8 +134,30 @@ def main(config, name_exp):
             'x_mc_pool': x_mc_pool,
             'model': model_gp
         }
-        # Select_indices method with the chosen active learning strategy
-        selected_indices = active_learning.select_indices(al_strategy, **args_al)
+
+        if config['pareto_metrics']:
+            # Compute pareto front with normalised objectives
+            mean_pred_norm = normalize_tensor(torch.abs(mean_pred))
+            std_pred_norm = normalize_tensor(std_pred)
+            pareto_front, _, _, knee_index, _, compromised_index, _ = active_learning.compute_pareto_front(mean_pred_norm, std_pred_norm)
+
+            # Select idx from pareto
+            if al_strategy == 'knee':
+                selected_indices = knee_index.tolist()
+            elif al_strategy == 'compromise':
+                selected_indices = compromised_index.tolist()
+            else:
+                # Select idx with U or EFF
+                selected_indices = active_learning.select_indices(al_strategy, **args_al) 
+
+            # Metrics from the pareto
+            selected_objective_norm = torch.tensor([mean_pred_norm[selected_indices], std_pred_norm[selected_indices]])
+            perpendicular_distance, distance_to_extremes = distances_in_pareto(selected_objective_norm, pareto_front)
+            pareto_metrics.append((perpendicular_distance.item(), distance_to_extremes.item()))
+            wandb.log({"perp_distance":perpendicular_distance.item(), "distance_to_extreme": distance_to_extremes.item()}, step=it)
+        else:
+            # Select_indices method with the chosen active learning strategy
+            selected_indices = active_learning.select_indices(al_strategy, **args_al)
 
         # Get training and target samples
         selected_samples_norm = x_mc_pool[selected_indices]
@@ -164,7 +186,7 @@ def main(config, name_exp):
 
     #saving final results
     results_file['Pf_model'] = pf_evol
-    results_file['b_stab'] = stop_crit
+    results_file['Pareto_metrics'] = pareto_metrics
     results_file['training_samples'] = x_train_norm.tolist(), y_train.tolist()  #training samples
 
     with open(results_dir + 'output.json', 'w') as file_id:
