@@ -206,7 +206,7 @@ def main(config, name_exp):
     print(f"Active learning completed in: {(execution_time/60):.2f} mins")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='GP Regressor trained with M.O. batch active learning for structural reliability')
+    parser = argparse.ArgumentParser(description='Multi-objective active learning for structural reliability')
     parser.add_argument('--config', type=str, nargs='?', action='store', default='default',
                         help='Configuration file name in config/ Def: default')
     parser.add_argument('--output', type=str, nargs='?', action='store', default='1',
