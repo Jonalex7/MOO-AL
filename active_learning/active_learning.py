@@ -18,7 +18,7 @@ class BatchActiveLearning():
             'random': (self.get_random, ['x_mc_pool']),
             'eff': (self.get_eff_function, ['mean_prediction', 'std_prediction']),
             'knee': (self.get_mo_function, ['mean_prediction', 'std_prediction']),
-            'compromise': (self.get_mo_function, ['mean_prediction', 'std_prediction']),
+            'compromised': (self.get_mo_function, ['mean_prediction', 'std_prediction']),
         }
 
     def select_indices(self, al_strategy, **kwargs):
@@ -28,8 +28,8 @@ class BatchActiveLearning():
             args = [kwargs[arg] for arg in required_args]
             
             # Specify the method parameter if needed for `get_mo_function`
-            if al_strategy in ['knee', 'compromise']:
-                method_name = 'knee' if al_strategy == 'knee' else 'compromise'
+            if al_strategy in ['knee', 'compromised']:
+                method_name = 'knee' if al_strategy == 'knee' else 'compromised'
                 return method(*args, method=method_name)
             else:
                 return method(*args)
@@ -113,7 +113,7 @@ class BatchActiveLearning():
 
         if method == 'knee':
             selected_indices = original_knee_index.tolist()
-        elif method == 'compromise':
+        elif method == 'compromised':
             selected_indices = original_compromised_index.tolist()
         else:
             raise ValueError(f"Unknown MO pareto strategy: {method}")
