@@ -35,6 +35,32 @@ class BatchActiveLearning():
                 return method(*args)
         else:
             raise ValueError(f"Unknown active learning strategy: {al_strategy}")
+
+    def logistic_gamma(self, delta_P, delta_P0=0.1, k=20):
+        gamma_max = 1.0
+        gamma = gamma_max*(1 / (1 + np.exp(-k * (delta_P - delta_P0))))
+        return gamma
+
+    def get_mo_reliability(self, gamma, pareto_front):
+        # Extract mean predictions and standard deviations
+        mean_predictions = pareto_front[:, 0]
+        std_predictions = pareto_front[:, 1]
+        
+        # Normalize the objectives to [0, 1]
+        mean_min, mean_max = mean_predictions.min(), mean_predictions.max()
+        std_min, std_max = std_predictions.min(), std_predictions.max()
+        
+        normalized_mean = (mean_predictions - mean_min) / (mean_max - mean_min)
+        normalized_std = (std_predictions - std_min) / (std_max - std_min)
+        
+        # Calculate the scalar scores with the desired gamma mapping
+        scores = (1 - gamma) * normalized_mean + gamma * normalized_std
+
+        # Assign weights to samples
+        weights = scores / scores.sum()
+        arg_max = np.argmax(weights).item()
+        # mo_reliability = pareto_front[arg_max]
+        return arg_max
             
     def calculate_determinant(self, x_mc, model, sample, selected_indices):
         x_assemble = x_mc[selected_indices + [sample]]
@@ -148,12 +174,11 @@ class BatchActiveLearning():
         knee_point, knee_index = self.calculate_knee_point(pareto_front)
         original_knee_index = pareto_front_indices[knee_index]
 
-
         # Calculate the compromised point from the ideal(utopian) point
         compromised_point, compromised_index, ideal_point = self.calculate_compromised_point(pareto_front)
         original_compromised_index = pareto_front_indices[compromised_index]
         
-        return pareto_front, is_pareto_efficient, knee_point, original_knee_index, compromised_point, original_compromised_index, ideal_point
+        return pareto_front, pareto_front_indices, knee_point, original_knee_index, compromised_point, original_compromised_index, ideal_point
 
     def calculate_knee_point(self, pareto_front: torch.Tensor):
         # Define the line between the first and last point in the Pareto front

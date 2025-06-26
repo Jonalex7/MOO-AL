@@ -74,7 +74,14 @@ def main(config, name_exp):
     iterations = int((budget-doe)/al_batch) + 1 #iteration to complete the available budget-doe
 
     start_time = time.time()
-    counter = 0
+
+    if al_strategy == 'mo_reliability': # Parameters needed for mo_reliability
+        N_it = config['N_it']  # Number of iterations to consider for moving average
+        delta_P0 = config['delta_p0'] 
+        k= config['k_balance']
+        Pf_prev = 0   
+        delta_Pf_buffer = [] 
+
     # Active learning loop
     for it in range(iterations + 1):
         
@@ -123,18 +130,38 @@ def main(config, name_exp):
             # Compute pareto front with normalised objectives
             mean_pred_norm = normalize_tensor(torch.abs(mean_pred))
             std_pred_norm = normalize_tensor(std_pred)
-            pareto_front, _, _, knee_index, _, compromised_index, _ = active_learning.compute_pareto_front(mean_pred_norm, std_pred_norm)
+            pareto_front, pareto_front_indices, _, knee_index, _, compromised_index, _ = active_learning.compute_pareto_front(mean_pred_norm, std_pred_norm)
 
             # Select idx from pareto
             if al_strategy == 'knee':
                 selected_indices = knee_index.tolist()
             elif al_strategy == 'compromise':
                 selected_indices = compromised_index.tolist()
+            elif al_strategy == 'mo_reliability':
+                # Checking Pf rel. difference to choose gamma behaviour
+                Pf_current = Pf_model
+                if Pf_prev != 0:
+                    delta_Pf = abs(Pf_current - Pf_prev) / Pf_prev
+
+                else:
+                    delta_Pf = 1e2  # Handle division by zero
+
+                delta_Pf_buffer.append(delta_Pf)
+                if len(delta_Pf_buffer) > N_it:
+                    delta_Pf_buffer.pop(0)  # Keep only the last N values
+
+                delta_Pf_avg = np.mean(delta_Pf_buffer)
+                gamma = active_learning.logistic_gamma(delta_Pf_avg, delta_P0=delta_P0, k=k) # gamma : 0 to exploit - 1 to explore
+                print(f'delta_pf_avr: {delta_Pf_avg:.3f}, gamma_log: {gamma:.3f} \n')
+                Pf_prev = Pf_current
+                mo_pareto_index = active_learning.get_mo_reliability(gamma=gamma, pareto_front=pareto_front)  
+                selected_indices = [pareto_front_indices[mo_pareto_index].item()]
+
             else:
                 # Select idx with U or EFF
                 selected_indices = active_learning.select_indices(al_strategy, **args_al) 
 
-            # Metrics from the pareto
+            # Saving points for pareto metrics (first, last, and selected sample)
             selected_objective_norm = torch.tensor([mean_pred_norm[selected_indices], std_pred_norm[selected_indices]])
             pareto_metrics.append((pareto_front[0].tolist(), pareto_front[-1].tolist(), selected_objective_norm.tolist()))
 
