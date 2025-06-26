@@ -8,14 +8,13 @@ import time
 import torch
 import numpy as np
 import yaml
-import wandb
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
 from scipy.stats import norm
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import BatchActiveLearning
-from utils.data import isoprobabilistic_transform, custom_optimizer, parallel_predict
+from utils.data import isoprobabilistic_transform, custom_optimizer, parallel_predict, distances_in_pareto, normalize_tensor
 
 def main(config, name_exp):
     # getting args from config file
@@ -48,10 +47,13 @@ def main(config, name_exp):
     results_file = {}
     pf_evol = []
     stop_crit = []
+    pareto_metrics = []
 
     # experiment seed for reproducibility
-    if seed_exp == -1:
+    if seed_exp is None:
         seed_exp = np.random.randint(0, 2**30 - 1)
+    else:
+        seed_exp=int(seed_exp)
 
     np.random.seed(seed_exp)
     torch.manual_seed(seed_exp)
@@ -63,9 +65,6 @@ def main(config, name_exp):
         json.dump(config, file_id, indent=4)
 
     print(f'Experiment settings: {config}')
-    ## log to wandb
-    run_name = f'{name_exp}_{date_time_stamp}'
-    wandb.init(project='Batch_AL', mode="offline", name=run_name, config=config)
     
     # Design of experiments
     x_train_norm, _ , y_train = lstate.get_doe(n_samples=doe, method='lhs', random_state=random_state)
@@ -75,12 +74,18 @@ def main(config, name_exp):
     iterations = int((budget-doe)/al_batch) + 1 #iteration to complete the available budget-doe
 
     start_time = time.time()
-    counter = 0
+
+    if al_strategy == 'mo_reliability': # Parameters needed for mo_reliability
+        N_it = config['N_it']  # Number of iterations to consider for moving average
+        delta_P0 = config['delta_p0'] 
+        k= config['k_balance']
+        Pf_prev = 0   
+        delta_Pf_buffer = [] 
+
     # Active learning loop
     for it in range(iterations + 1):
         
         print(f'Training size: {len(x_train_norm)} samples', end=" ")
-        wandb.log({"train_size": len(x_train_norm)}, step=it)
 
         # Train the Gaussian Process model
         kernel = 1.0 * Matern(length_scale=1.0, nu=1.5)
@@ -89,7 +94,6 @@ def main(config, name_exp):
 
         # Pf estimation with MCs
         x_mcs_pf = np.random.normal(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
-        # mean_pf = model_gp.predict(x_mcs_pf, return_std=False)
         mean_pf, std_pf = parallel_predict(model_gp, x_mcs_pf)
         Pf_model = (torch.sum(mean_pf < 0) / len(mean_pf)).item()
         pf_evol.append(Pf_model)
@@ -98,29 +102,12 @@ def main(config, name_exp):
         B_model = - norm.ppf(Pf_model)
         B_rel_diff = (B_model-B_ref)/B_ref
 
-        # B bounds
-        Pf_plus = (torch.sum(mean_pf+2*std_pf < 0) / len(mean_pf)).item()
-        Pf_minus = (torch.sum(mean_pf-2*std_pf < 0) / len(mean_pf)).item()
-        B_bound = np.abs( (- norm.ppf(Pf_plus)) - (- norm.ppf(Pf_minus)) ) / B_model
-
         # check beta stability
         b_stab = np.abs(B_model - b_j) / B_model   #should be less than 0.005
+        b_j = B_model  # Update b_j for the next iteration
         
-        print(f'Pf_ref: {Pf_ref:.3E}, Pf_model: {Pf_model:.3E}, B_rel_diff: {B_rel_diff.item():.1%}, B_stab: {b_stab:.1%}, eps-bb: {B_bound:.3E} \n')
-        wandb.log({"pf_ref":Pf_ref, "pf_model": Pf_model, "b_rel": B_rel_diff, "b_stab": b_stab}, step=it)
+        print(f'Pf_ref: {Pf_ref:.3E}, Pf_model: {Pf_model:.3E}, B_rel_diff: {B_rel_diff.item():.2%}, B_stab: {b_stab:.1%}')
 
-        # Check if b_stab is smaller than 0.005
-        if b_stab < 0.005:
-            counter += 1
-        else:
-            counter = 0  # Reset counter if condition not met
-
-        # Print 'stop' if b_stab is small for 3 consecutive iterations
-        if counter >= 3:
-            print(f'Stop at {len(x_train_norm)} samples!')
-            stop_crit.append([len(x_train_norm), Pf_model, b_stab])
-
-        b_j = B_model
         
         # Making predictions of mean and std for mc population 
         x_mc_pool = np.random.normal(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
@@ -134,8 +121,49 @@ def main(config, name_exp):
             'x_mc_pool': x_mc_pool,
             'model': model_gp
         }
-        # Select_indices method with the chosen active learning strategy
-        selected_indices = active_learning.select_indices(al_strategy, **args_al)
+
+        if config['pareto_metrics']:
+            # Compute pareto front with normalised objectives
+            mean_pred_norm = normalize_tensor(torch.abs(mean_pred))
+            std_pred_norm = normalize_tensor(std_pred)
+            pareto_front, pareto_front_indices, _, knee_index, _, compromised_index, _ = active_learning.compute_pareto_front(mean_pred_norm, std_pred_norm)
+
+            # Select idx from pareto
+            if al_strategy == 'knee':
+                selected_indices = knee_index.tolist()
+            elif al_strategy == 'compromise':
+                selected_indices = compromised_index.tolist()
+            elif al_strategy == 'mo_reliability':
+                # Checking Pf rel. difference to choose gamma behaviour
+                Pf_current = Pf_model
+                if Pf_prev != 0:
+                    delta_Pf = abs(Pf_current - Pf_prev) / Pf_prev
+
+                else:
+                    delta_Pf = 1e2  # Handle division by zero
+
+                delta_Pf_buffer.append(delta_Pf)
+                if len(delta_Pf_buffer) > N_it:
+                    delta_Pf_buffer.pop(0)  # Keep only the last N values
+
+                delta_Pf_avg = np.mean(delta_Pf_buffer)
+                gamma = active_learning.logistic_gamma(delta_Pf_avg, delta_P0=delta_P0, k=k) # gamma : 0 to exploit - 1 to explore
+                print(f'delta_pf_avr: {delta_Pf_avg:.3f}, gamma_log: {gamma:.3f} \n')
+                Pf_prev = Pf_current
+                mo_pareto_index = active_learning.get_mo_reliability(gamma=gamma, pareto_front=pareto_front)  
+                selected_indices = [pareto_front_indices[mo_pareto_index].item()]
+
+            else:
+                # Select idx with U or EFF
+                selected_indices = active_learning.select_indices(al_strategy, **args_al) 
+
+            # Saving points for pareto metrics (first, last, and selected sample)
+            selected_objective_norm = torch.tensor([mean_pred_norm[selected_indices], std_pred_norm[selected_indices]])
+            pareto_metrics.append((pareto_front[0].tolist(), pareto_front[-1].tolist(), selected_objective_norm.tolist()))
+
+        else:
+            # Select_indices method with the chosen active learning strategy
+            selected_indices = active_learning.select_indices(al_strategy, **args_al)
 
         # Get training and target samples
         selected_samples_norm = x_mc_pool[selected_indices]
@@ -164,7 +192,7 @@ def main(config, name_exp):
 
     #saving final results
     results_file['Pf_model'] = pf_evol
-    results_file['b_stab'] = stop_crit
+    results_file['Pareto_metrics'] = pareto_metrics
     results_file['training_samples'] = x_train_norm.tolist(), y_train.tolist()  #training samples
 
     with open(results_dir + 'output.json', 'w') as file_id:
@@ -177,12 +205,10 @@ def main(config, name_exp):
     end_time = time.time()
     execution_time = end_time - start_time
 
-    wandb.log({"exc_time_mins": execution_time/60}, step=it)
-    wandb.finish()
     print(f"Active learning completed in: {(execution_time/60):.2f} mins")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='GP Regressor trained with M.O. batch active learning for structural reliability')
+    parser = argparse.ArgumentParser(description='Multi-objective active learning for structural reliability')
     parser.add_argument('--config', type=str, nargs='?', action='store', default='default',
                         help='Configuration file name in config/ Def: default')
     parser.add_argument('--output', type=str, nargs='?', action='store', default='1',
@@ -205,11 +231,20 @@ if __name__ == "__main__":
         if key in config:
             # Get the type from the config
             config_type = type(config[key])
-            # Convert value to the correct type
-            if config_type == bool:
-                value = value.lower() in ('true', '1', 'yes')
+
+            # Check if 'null' or similar was provided; convert to None
+            if value.lower() in ('null', 'none'):
+                value = None
+            elif config[key] is not None:
+                # Convert to the correct type
+                if config_type == bool:
+                    value = value.lower() in ('true', '1', 'yes')
+                else:
+                    value = config_type(value)
             else:
-                value = config_type(value)
+                # Convert to integer if possible
+                value = int(value) if value.isdigit() else value
+
             config[key] = value
         else:
             print(f"Warning: Key '{key}' not found in config. Adding it as a new entry.")

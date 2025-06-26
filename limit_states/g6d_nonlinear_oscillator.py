@@ -5,21 +5,22 @@ from scipy.stats import qmc
 
 from utils.data import isoprobabilistic_transform
 
-'''Example 4: The Himmelblau Function Ref. (HMCMC High Dim, Prof. Kostas, pag. 16) 
-which is particularly suitable for reliability examples with multiple separated failure domains. 
-x1 and x2 are assumed to be independent standard normal random variables and 
-the constant beta is used to define different levels of the failure probability. 
-(beta = 95 for Ref. PF=1.65E-4)   (beta = 50 for Ref. PF=2.77E-7) (beta = 65 for Ref. PF=2.8713e-6) '''
+'''4.3. AK-MCS Example 3: dynamic response of a non-linear oscillator
+It consists of a non-linear undamped single degree of freedom system'''
 
-class g2d_himmelblau():
+class g6d_nonlinear_oscillator():
     def __init__(self):
-        self.input_dim = 2
+        self.input_dim = 6
         self.output_dim = 1
-        self.target_pf = 0.0001674 # ref with MCS = 1e7
+        self.target_pf = 0.0286178 # ref with MCS = 1e7
         self.standard_marginals = {f'x{var+1}': [0, 1.0, 'norm'] for var in range(self.input_dim )}
 
-        self.physical_marginals = {'x1': [0, 1.0, 'norm'],
-                          'x2': [0, 1.0, 'norm']}
+        self.physical_marginals = {'x1': [1, 0.05, 'norm'], #m
+                                'x2': [1, 0.1, 'norm'],     #c1
+                                'x3': [0.1, 0.01, 'norm'],  #c2
+                                'x4': [0.5, 0.05, 'norm'],  #r
+                                'x5': [1, 0.2, 'norm'],     #F1
+                                'x6': [1, 0.2, 'norm']}     #t1
         '''mean(or min), std(or max), marginal_distrib'''
 
     def eval_lstate(self, x):
@@ -28,11 +29,17 @@ class g2d_himmelblau():
         n_dim = len(x.shape)
         if n_dim == 1:
             x = np.array(x)[np.newaxis]
-            
-        beta = 95
-        term1 = (((0.75*x[:,0] - 0.5)**2 / 1.81) + ((0.75*x[:,1] - 0.5) / 1.81) - 11)**2
-        term2 = (((0.75*x[:,0] - 1.0)/ 1.81) + ((0.75*x[:,1] - 0.5)**2 / 1.81) - 7)**2
-        g = term1 + term2 - beta
+        
+        m = x[:, 0]
+        c1 = x[:, 1]
+        c2 = x[:, 2]
+        r = x[:, 3]
+        f1 = x[:, 4]
+        t1 = x[:, 5]
+
+        w0 = np.sqrt((c1+c2)/m)
+        g = 3*r - np.abs(((2*f1)/(m*w0**2)) * np.sin((t1 * w0)/2))
+
         return torch.tensor(g)    
 
     def monte_carlo_estimate(self, n_samples):

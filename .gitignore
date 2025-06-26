@@ -1,6 +1,9 @@
 # Results
 results/
-.pkl
+*.pkl
+*.json
+*.pdf
+*.out
 
 # Jupyter Notebook
 .ipynb_checkpoints

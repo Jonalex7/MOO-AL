@@ -5,21 +5,20 @@ from scipy.stats import qmc
 
 from utils.data import isoprobabilistic_transform
 
-'''Example 4: The Himmelblau Function Ref. (HMCMC High Dim, Prof. Kostas, pag. 16) 
-which is particularly suitable for reliability examples with multiple separated failure domains. 
-x1 and x2 are assumed to be independent standard normal random variables and 
-the constant beta is used to define different levels of the failure probability. 
-(beta = 95 for Ref. PF=1.65E-4)   (beta = 50 for Ref. PF=2.77E-7) (beta = 65 for Ref. PF=2.8713e-6) '''
+'''4.4. AK-MCS Example 4: dynamic response of a non-linear oscillator
+It consists of an analytical performance function, where the number of variables can be changed
+without modifying significantly the level of failure probability (n=40, Pf+1.813e-3, n=100, Pf=1.7e-3)'''
 
-class g2d_himmelblau():
+class gd_high_dimensional():
     def __init__(self):
-        self.input_dim = 2
+        self.input_dim = 40
         self.output_dim = 1
-        self.target_pf = 0.0001674 # ref with MCS = 1e7
+        self.std_dev = 0.2
+        self.target_pf = 0.0019820 # ref with MCS = 1e7
         self.standard_marginals = {f'x{var+1}': [0, 1.0, 'norm'] for var in range(self.input_dim )}
 
-        self.physical_marginals = {'x1': [0, 1.0, 'norm'],
-                          'x2': [0, 1.0, 'norm']}
+        self.physical_marginals = {f'x{var+1}': [1, self.std_dev, 'lognorm'] for var in range(self.input_dim )}
+
         '''mean(or min), std(or max), marginal_distrib'''
 
     def eval_lstate(self, x):
@@ -28,11 +27,14 @@ class g2d_himmelblau():
         n_dim = len(x.shape)
         if n_dim == 1:
             x = np.array(x)[np.newaxis]
-            
-        beta = 95
-        term1 = (((0.75*x[:,0] - 0.5)**2 / 1.81) + ((0.75*x[:,1] - 0.5) / 1.81) - 11)**2
-        term2 = (((0.75*x[:,0] - 1.0)/ 1.81) + ((0.75*x[:,1] - 0.5)**2 / 1.81) - 7)**2
-        g = term1 + term2 - beta
+        
+        n = self.input_dim
+        sigma = self.std_dev
+
+        term_1 = n + 3 * sigma * np.sqrt(n)
+        term_2 = np.sum(x, axis=1)
+        g = term_1 - term_2
+
         return torch.tensor(g)    
 
     def monte_carlo_estimate(self, n_samples):
