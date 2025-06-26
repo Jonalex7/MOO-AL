@@ -8,7 +8,6 @@ import time
 import torch
 import numpy as np
 import yaml
-import wandb
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
 from scipy.stats import norm
@@ -66,9 +65,6 @@ def main(config, name_exp):
         json.dump(config, file_id, indent=4)
 
     print(f'Experiment settings: {config}')
-    ## log to wandb
-    run_name = f'{name_exp}_{date_time_stamp}'
-    wandb.init(project='Batch_AL', mode="offline", name=run_name, config=config)
     
     # Design of experiments
     x_train_norm, _ , y_train = lstate.get_doe(n_samples=doe, method='lhs', random_state=random_state)
@@ -83,7 +79,6 @@ def main(config, name_exp):
     for it in range(iterations + 1):
         
         print(f'Training size: {len(x_train_norm)} samples', end=" ")
-        wandb.log({"train_size": len(x_train_norm)}, step=it)
 
         # Train the Gaussian Process model
         kernel = 1.0 * Matern(length_scale=1.0, nu=1.5)
@@ -108,21 +103,8 @@ def main(config, name_exp):
         # check beta stability
         b_stab = np.abs(B_model - b_j) / B_model   #should be less than 0.005
         
-        print(f'Pf_ref: {Pf_ref:.3E}, Pf_model: {Pf_model:.3E}, B_rel_diff: {B_rel_diff.item():.1%}, B_stab: {b_stab:.1%}, eps-bb: {B_bound:.3E} \n')
-        wandb.log({"pf_ref":Pf_ref, "pf_model": Pf_model, "b_rel": B_rel_diff, "b_stab": b_stab}, step=it)
+        print(f'Pf_ref: {Pf_ref:.3E}, Pf_model: {Pf_model:.3E}, B_rel_diff: {B_rel_diff.item():.2%}, B_stab: {b_stab:.1%}')
 
-        # Check if b_stab is smaller than 0.005
-        if b_stab < 0.005:
-            counter += 1
-        else:
-            counter = 0  # Reset counter if condition not met
-
-        # Print 'stop' if b_stab is small for 3 consecutive iterations
-        if counter >= 3:
-            # print(f'Stop at {len(x_train_norm)} samples!')
-            stop_crit.append([len(x_train_norm), Pf_model, b_stab])
-
-        b_j = B_model
         
         # Making predictions of mean and std for mc population 
         x_mc_pool = np.random.normal(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
@@ -154,9 +136,8 @@ def main(config, name_exp):
 
             # Metrics from the pareto
             selected_objective_norm = torch.tensor([mean_pred_norm[selected_indices], std_pred_norm[selected_indices]])
-            perpendicular_distance, distance_to_extremes = distances_in_pareto(selected_objective_norm, pareto_front)
-            pareto_metrics.append((perpendicular_distance.item(), distance_to_extremes.item()))
-            wandb.log({"perp_distance":perpendicular_distance.item(), "distance_to_extreme": distance_to_extremes.item()}, step=it)
+            pareto_metrics.append((pareto_front[0].tolist(), pareto_front[-1].tolist(), selected_objective_norm.tolist()))
+
         else:
             # Select_indices method with the chosen active learning strategy
             selected_indices = active_learning.select_indices(al_strategy, **args_al)
@@ -201,8 +182,6 @@ def main(config, name_exp):
     end_time = time.time()
     execution_time = end_time - start_time
 
-    wandb.log({"exc_time_mins": execution_time/60}, step=it)
-    wandb.finish()
     print(f"Active learning completed in: {(execution_time/60):.2f} mins")
 
 if __name__ == "__main__":
