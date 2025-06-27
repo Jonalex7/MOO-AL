@@ -1,4 +1,6 @@
+from typing import List, Optional
 import torch
+from torch import Tensor
 import numpy as np
 from scipy.stats import norm
 from joblib import Parallel, delayed
@@ -11,10 +13,6 @@ class BatchActiveLearning():
         # Define the strategy mapping as a class attribute
         self.al_strategy_mapping = {
             'u': (self.get_u_function, ['mean_prediction', 'std_prediction']),
-            'corr_det': (self.get_corr_det, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
-            'corr_eigen': (self.get_corr_eigen, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
-            'corr_entropy': (self.get_corr_entropy, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
-            'corr_condvar': (self.get_corr_condvar, ['x_mc_pool', 'model', 'mean_prediction', 'std_prediction']),
             'random': (self.get_random, ['x_mc_pool']),
             'eff': (self.get_eff_function, ['mean_prediction', 'std_prediction']),
             'knee': (self.get_mo_function, ['mean_prediction', 'std_prediction']),
@@ -139,7 +137,7 @@ class BatchActiveLearning():
 
         if method == 'knee':
             selected_indices = original_knee_index.tolist()
-        elif method == 'compromised':
+        elif method == 'compromise':
             selected_indices = original_compromised_index.tolist()
         else:
             raise ValueError(f"Unknown MO pareto strategy: {method}")
@@ -213,193 +211,142 @@ class BatchActiveLearning():
         
         return compromised_point, compromised_index, ideal_point
     
-    def get_correlation(self, x_mc, model, mean_prediction, std_prediction, samples=None):
-        if samples is None:
-            act_samples = self.n_active_samples
+
+class AcquisitionStrategy:
+    def __init__(
+        self,
+        acquisition_strategy: str,
+        moo_method: Optional[str] = None,
+    ):
+        self.strategy = acquisition_strategy.lower().strip()
+        # Only relevant when strategy == "mo"
+        if self.strategy == "moo":
+            if moo_method not in ("knee", "compromise"):
+                raise ValueError("`moo_method` must be 'knee' or 'compromise'")
+        self.moo_method = moo_method
+
+    def get_indices(
+        self,
+        mean_prediction: Tensor,
+        std_prediction: Tensor,
+        n_samples: int = 1,
+        skip_indices: Optional[List[int]] = None,
+        constant: float = 2.0,
+    ) -> List[int]:
+        if self.strategy == "u":
+            return self._u_function(mean_prediction, std_prediction, n_samples, skip_indices)
+        elif self.strategy == "eff":
+            return self._eff_function(mean_prediction, std_prediction, n_samples, skip_indices, constant)
+        elif self.strategy == "moo":
+            # moo_method was validated in __init__
+            return self.get_moo(mean_prediction, std_prediction, self.moo_method)
         else:
-            act_samples = samples
+            raise ValueError(f"Unknown acquisition strategy '{self.strategy}'")
 
-        #firs sample evaluated with U_function
-        selected_indices = self.get_u_function(mean_prediction, std_prediction, samples=1)
+    def _u_function(
+        self,
+        mean_prediction: Tensor,
+        std_prediction: Tensor,
+        n_samples: int,
+        skip_indices: Optional[List[int]]
+    ) -> List[int]:
+        u = mean_prediction.abs() / std_prediction
+        if skip_indices is not None:
+            u[skip_indices] = float('inf')
+        _, u_idx = u.squeeze().topk(n_samples, largest=False)
+        return u_idx.tolist()
 
-        for sample in range(act_samples-1):
-            #Covariance computation
-            det_cov = []
-            for sample in range(len(x_mc)):
-                x_assemble = x_mc[selected_indices + [sample]] 
-                _, cov_assemble = model.predict(x_assemble, return_std=False, return_cov=True)
-                det_ = np.linalg.det(cov_assemble)
-                det_cov.append(det_)            
-        
-            det_cov = torch.tensor(det_cov)
+    def _eff_function(
+        self,
+        mean_prediction: Tensor,
+        std_prediction: Tensor,
+        n_samples: int,
+        skip_indices: Optional[List[int]],
+        constant: float = 2.0
+    ) -> List[int]:
+        eps = constant * std_prediction
+        eff = (
+            mean_prediction
+            * (
+                2 * norm.cdf(-mean_prediction / std_prediction)
+                - norm.cdf(-(eps + mean_prediction) / std_prediction)
+                - norm.cdf((eps - mean_prediction) / std_prediction)
+            )
+            - std_prediction
+            * (
+                2 * norm.pdf(-mean_prediction / std_prediction)
+                - norm.pdf(-(eps + mean_prediction) / std_prediction)
+                - norm.pdf((eps - mean_prediction) / std_prediction)
+            )
+            + eps
+            * (
+                norm.cdf((eps - mean_prediction) / std_prediction)
+                - norm.cdf((-eps - mean_prediction) / std_prediction)
+            )
+        )
+        if skip_indices is not None:
+            eff[skip_indices] = float('-inf')
+        _, eff_idx = eff.squeeze().topk(n_samples)
+        return eff_idx.tolist()
 
-            #evaluate U_function normalised with det_cov
-            u_function = (mean_prediction.abs())/det_cov
+    def get_moo(
+        self,
+        mean_prediction: Tensor,
+        std_prediction: Tensor,
+        method: Optional[str] = None
+    ) -> List[int]:
+        """
+        Multi-objective selection via Pareto front.
 
-            #avoid selected values
-            u_function[selected_indices] = np.inf
-
-            #adding selected indices
-            _, u_min_idx = u_function.topk(1, largest=False)
-            selected_indices.append(u_min_idx.item())
-
-        return selected_indices
-    
-    def get_corr_det(self, x_mc, model, mean_prediction, std_prediction, samples=None):
-        # print('determinant')
-        if samples is None:
-            act_samples = self.n_active_samples
+        method: 'knee' or 'compromise'
+        """
+        # Compute absolute mean for minimization
+        _, _, _, knee_idx, _, comp_idx, _ = self.compute_pareto_front(
+            torch.abs(mean_prediction), std_prediction
+        )
+        if method == 'knee':
+            return [int(knee_idx)]
+        elif method == 'compromise':
+            return [int(comp_idx)]
         else:
-            act_samples = samples
-        #firs sample evaluated with U_function
-        selected_indices = self.get_u_function(mean_prediction, std_prediction, samples=1)
+            raise ValueError(f"Unknown MO pareto strategy: {method}")
 
-        for _ in range(act_samples - 1):
-            # Covariance computation
-            # Use parallel processing to calculate the determinants for all samples
-            det_cov = Parallel(n_jobs=-1)(delayed(self.calculate_determinant)(x_mc, model, sample, selected_indices) for sample in range(len(x_mc)))
-        
-            det_cov = torch.tensor(det_cov)
+    def compute_pareto_front(
+        self,
+        mean_pred: Tensor,
+        std_pred: Tensor
+    ):
+        # Negate mean_pred for minimization via maximization logic
+        objectives = torch.stack([-mean_pred, std_pred], dim=1)
+        is_pareto = torch.ones(objectives.size(0), dtype=torch.bool)
+        for i, pt in enumerate(objectives):
+            if is_pareto[i]:
+                dominated = torch.all(objectives <= pt, dim=1) & torch.any(objectives < pt, dim=1)
+                is_pareto[dominated] = False
+        indices = torch.nonzero(is_pareto, as_tuple=False).squeeze()
+        front = objectives[is_pareto]
+        # Sort by first objective
+        order = front[:,0].argsort()
+        front = front[order]
+        indices = indices[order]
+        knee_pt, knee_idx = self.calculate_knee_point(front)
+        comp_pt, comp_idx, ideal_pt = self.calculate_compromised_point(front)
+        return front, indices, knee_pt, indices[knee_idx], comp_pt, indices[comp_idx], ideal_pt
 
-            #evaluate U_function normalised with det_cov
-            u_function = (mean_prediction.abs())/det_cov
+    def calculate_knee_point(self, pareto_front: Tensor):
+        p1, p2 = pareto_front[0], pareto_front[-1]
+        line = p2 - p1
+        line = line / torch.norm(line)
+        dists = torch.zeros(pareto_front.size(0))
+        for i, pt in enumerate(pareto_front):
+            vec = pt - p1
+            proj = p1 + torch.dot(vec, line) * line
+            dists[i] = torch.norm(pt - proj)
+        idx = torch.argmax(dists)
+        return pareto_front[idx], idx
 
-            #avoid selected values
-            u_function[selected_indices] = np.inf
-
-            #adding selected indices
-            _, u_min_idx = u_function.topk(1, largest=False)
-            selected_indices.append(u_min_idx.item())
-
-        return selected_indices
-    
-    def get_corr_eigen(self, x_mc, model, mean_prediction, std_prediction, samples=None):
-        # print('eigen')
-        if samples is None:
-            act_samples = self.n_active_samples
-        else:
-            act_samples = samples
-        #firs sample evaluated with U_function
-        selected_indices = self.get_u_function(mean_prediction, std_prediction, samples=1)
-
-        for _ in range(act_samples - 1):
-            # Covariance computation
-            # Use parallel processing to calculate the determinants for all samples
-            sum_eigen = Parallel(n_jobs=-1)(delayed(self.calculate_eigen)(x_mc, model, sample, selected_indices) for sample in range(len(x_mc)))
-        
-            sum_eigen = torch.tensor(sum_eigen)
-
-            #evaluate U_function normalised with det_cov
-            u_function = (mean_prediction.abs())/sum_eigen
-
-            #avoid selected values
-            u_function[selected_indices] = np.inf
-
-            #adding selected indices
-            _, u_min_idx = u_function.topk(1, largest=False)
-            selected_indices.append(u_min_idx.item())
-
-        return selected_indices
-
-    def get_corr_entropy(self, x_mc, model, mean_prediction, std_prediction, samples=None):
-        # print('determinant')
-        if samples is None:
-            act_samples = self.n_active_samples
-        else:
-            act_samples = samples
-        #firs sample evaluated with U_function
-        selected_indices = self.get_u_function(mean_prediction, std_prediction, samples=1)
-
-        for _ in range(act_samples - 1):
-            # Covariance computation
-            # Use parallel processing to calculate the determinants for all samples
-            det_cov = Parallel(n_jobs=-1)(delayed(self.differential_entropy)(x_mc, model, sample, selected_indices) for sample in range(len(x_mc)))
-        
-            det_cov = torch.tensor(det_cov)
-
-            #evaluate U_function normalised with det_cov
-            u_function = (mean_prediction.abs())/det_cov
-
-            #avoid selected values
-            u_function[selected_indices] = np.inf
-
-            #adding selected indices
-            _, u_min_idx = u_function.topk(1, largest=False)
-            selected_indices.append(u_min_idx.item())
-
-        return selected_indices
-
-    def get_corr_condvar(self, x_mc, model, mean_prediction, std_prediction, block_size=300, samples=None):
-        # print('determinant')
-        if samples is None:
-            act_samples = self.n_active_samples
-        else:
-            act_samples = samples
-        # Define the block size to loop over the MC pool
-        block_size = block_size
-        # First sample obtained with U_function
-        selected_indices = self.get_u_function(mean_prediction, std_prediction, samples=1)
-
-        for _ in range(act_samples - 1):
-            # Extract the selected samples
-            selected_samples = x_mc[selected_indices]
-            num_selected = len(selected_indices)
-
-            u_min = torch.inf
-
-            # Loop over x_mc_pool in blocks
-            for i in range(0, len(x_mc), block_size):
-                # Determine the end index of the block
-                end_idx = min(i + block_size, len(x_mc))
-                
-                # Get the block indices
-                block_indices = np.arange(i, end_idx)
-                
-                # Remove selected_indices from block_indices to avoid duplicates
-                block_indices = np.setdiff1d(block_indices, selected_indices)
-                
-                # Get the block samples
-                block_samples = x_mc[block_indices]
-                
-                # Prepend selected_samples to block_samples
-                subset = np.vstack((selected_samples, block_samples))
-
-                # Compute the covariance matrix for the subset
-                _, cov_subset = model.predict(subset, return_std=False, return_cov=True)   
-
-                # Partition the covariance matrix
-                K_aa = cov_subset[:num_selected, :num_selected]
-                K_ab = cov_subset[:num_selected, num_selected:]
-                K_ba = cov_subset[num_selected:, :num_selected]
-                K_bb = cov_subset[num_selected:, num_selected:]
-
-                # Compute the inverse of K_aa
-                # ----------------------------------------------------------------------------------------------------
-                # Regularize if necessary to handle numerical issues
-                jitter = 1e-6 * np.eye(K_aa.shape[0]) # Add jitter for numerical stability
-                # Perform Cholesky decomposition of K_aa + jitter
-                try:
-                    L = np.linalg.cholesky(K_aa + jitter)
-                except np.linalg.LinAlgError:
-                    raise np.linalg.LinAlgError("Cholesky decomposition failed. Consider increasing the jitter term.")
-                # Solve K_aa @ X = K_ab
-                Y = np.linalg.solve(L, K_ab)
-                X = np.linalg.solve(L.T, Y)
-
-                # Compute the diagonal of the conditional covariance
-                diag_K_bb = np.diag(K_bb)
-                cross_terms = np.sum(K_ba * X.T, axis=1)
-                conditional_variances = diag_K_bb - cross_terms
-                # ----------------------------------------------------------------------------------------------------
-                # Evaluate U on the block
-                u_block = mean_prediction[block_indices].abs() / conditional_variances
-                u_min_block, u_min_idx = u_block.topk(1, largest=False)
-
-                # Get the index with the min global U value
-                if u_min_block < u_min:
-                    selected_idx = block_indices[u_min_idx]
-                    u_min = u_min_block
-
-            selected_indices = selected_indices + [selected_idx]
-
-        return selected_indices
+    def calculate_compromised_point(self, pareto_front: Tensor):
+        ideal = torch.max(pareto_front, dim=0).values
+        dists = torch.norm(pareto_front - ideal, dim=1)
+        idx = torch.argmin(dists)
+        return pareto_front[idx], idx, ideal
