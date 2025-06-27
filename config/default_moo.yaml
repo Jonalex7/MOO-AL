@@ -1,11 +1,12 @@
 # --- active training options ---
-case_study: 'hat' # Specify target LS: four_branch_6, himmelblau, pushover_frame, le_frame, hat, damped_oscillator, rp55
-al_strategy: 'mo_reliability'    #knee, compromised, eff, u, corr_det, corr_eigen, corr_entropy, corr_condvar, random
+case_study: 'four_branch_6' # Specify target LS: four_branch_6, himmelblau,hat, damped_oscillator
+al_strategy: 'moo'    #knee, compromise, eff, u, corr_det, corr_eigen, corr_entropy, corr_condvar, random
+moo_method: 'knee'  # knee, compromise, reliability
 al_batch: 1   # batch sample size per active iteration
-budget: 100   # max number of samples
-doe: 10     # initial DoE with LHS
+active_samples: 20   # max number of active samples
+passive_samples: 10     # initial DoE with LHS
 n_mcs_pool: 1000000  # size of MonteCarlo pool candidates
-seed: null # null for random seed (default)
+seed: 28 # null for random seed (default)
 
 # --- MO reliability trade-off (gamm a) control ---
 N_it: 2 # Number of iterations to consider for moving average
@@ -16,5 +17,5 @@ k_balance: 40 # Positive constant controlling how quickly gamma transition from 
 n_mcs_pf: 10000000 # size of MonteCarlo sampling for pf estimation
 
 #--- output model----
-save_interval: 25
-pareto_metrics: True
+save_interval: 10
+pareto_metrics: False
