@@ -6,33 +6,77 @@ from scipy.stats import norm
 from utils.data import normalize_tensor
 
 class AcquisitionStrategy:
+    """
+    This class holds methods for acquisition functions such as
+    U-function, EFF, and multi-objective Pareto-based selection (including reliability adaptation).
+    """
     def __init__(
         self,
-        acquisition_strategy: str,
-        moo_method: Optional[str] = None,
+        acquisition_strategy: str, # 'u', 'eff', or 'moo'
+        moo_method: Optional[str] = None, # 'knee', 'compromise', or 'reliability'
+        N_it: int = 2, # Number of iterations to consider for moving average in reliability method
+        delta_P0: float = 0.2, # (0,1) threshold of relative difference at which gamma=0.5
+        k_balance: float = 40,  # Positive constant controlling how quickly gamma transition from 0 to 1
+        pareto_metrics: bool = False, # If True, returns Pareto front and selected indices
     ):
         self.strategy = acquisition_strategy.lower().strip()
-        # Only relevant when strategy == "mo"
+
         if self.strategy == "moo":
-            if moo_method not in ("knee", "compromise"):
-                raise ValueError("`moo_method` must be 'knee' or 'compromise'")
-        self.moo_method = moo_method
+            if moo_method not in ("knee", "compromise", "reliability"):
+                raise ValueError("`moo_method` must be 'knee', 'compromise' or 'reliability'")
+            self.moo_method = moo_method
+        
+        # Initialize reliability parameters only when using moo_reliability
+        if self.strategy == "moo" and self.moo_method == "reliability":
+            self.N_it = N_it
+            self.delta_P0 = delta_P0
+            self.k_balance = k_balance
+            self.Pf_prev = 0.0
+            self.delta_Pf_buffer: List[float] = []
+
+        self.pareto_metrics = pareto_metrics
 
     def get_indices(
         self,
-        mean_prediction: Tensor,
-        std_prediction: Tensor,
-        n_samples: int = 1,
-        skip_indices: Optional[List[int]] = None,
-        constant: float = 2.0,
+        mean_prediction: Tensor, # Mean predictions from the model
+        std_prediction: Tensor, # Standard deviations from the model
+        n_samples: int = 1, # Number of samples to select
+        skip_indices: Optional[List[int]] = None, # Indices to skip in the pool
+        constant: float = 2.0, # Constant for EFF function
+        pf_estimate: Optional[float] = None # Current Pf estimate for reliability method (if applicable)
     ) -> List[int]:
+        
+        # Get indices based on the acquisition strategy
+        # If pareto metrics are requested, compute and return the Pareto front
+        # MOO-based selection
+        if self.strategy == "moo":
+            pareto, selected_indices = self.get_moo(mean_prediction, std_prediction, self.moo_method, pf_estimate=pf_estimate)
+            if self.pareto_metrics:
+                return pareto, selected_indices
+            else:
+                return selected_indices
+        # U-based selection
         if self.strategy == "u":
-            return self._u_function(mean_prediction, std_prediction, n_samples, skip_indices)
+            selected_indices = self._u_function(mean_prediction, std_prediction, n_samples, skip_indices)
+            if self.pareto_metrics:
+                mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
+                std_pred_norm = normalize_tensor(std_prediction)
+                pareto, _, _, _, _, _, _ = self.compute_pareto_front(
+                    mean_pred_norm, std_pred_norm)
+                return pareto, selected_indices
+            else:
+                return selected_indices
+        # EFF-based selection
         elif self.strategy == "eff":
-            return self._eff_function(mean_prediction, std_prediction, n_samples, skip_indices, constant)
-        elif self.strategy == "moo":
-            # moo_method was validated in __init__
-            return self.get_moo(mean_prediction, std_prediction, self.moo_method)
+            selected_indices = self._eff_function(mean_prediction, std_prediction, n_samples, skip_indices, constant)
+            if self.pareto_metrics:
+                mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
+                std_pred_norm = normalize_tensor(std_prediction)
+                pareto, _, _, _, _, _, _ = self.compute_pareto_front(
+                    mean_pred_norm, std_pred_norm)
+                return pareto, selected_indices
+            else:
+                return selected_indices
         else:
             raise ValueError(f"Unknown acquisition strategy '{self.strategy}'")
 
@@ -40,8 +84,8 @@ class AcquisitionStrategy:
         self,
         mean_prediction: Tensor,
         std_prediction: Tensor,
-        n_samples: int,
-        skip_indices: Optional[List[int]]
+        n_samples: int, # Number of samples to select
+        skip_indices: Optional[List[int]] # Indices to skip in the pool
     ) -> List[int]:
         u = mean_prediction.abs() / std_prediction
         if skip_indices is not None:
@@ -53,8 +97,8 @@ class AcquisitionStrategy:
         self,
         mean_prediction: Tensor,
         std_prediction: Tensor,
-        n_samples: int,
-        skip_indices: Optional[List[int]],
+        n_samples: int, # Number of samples to select
+        skip_indices: Optional[List[int]], # Indices to skip in the pool
         constant: float = 2.0
     ) -> List[int]:
         eps = constant * std_prediction
@@ -86,21 +130,27 @@ class AcquisitionStrategy:
         self,
         mean_prediction: Tensor,
         std_prediction: Tensor,
-        method: Optional[str] = None
+        method: Optional[str] = None,  # 'knee', 'compromise' or 'reliability'
+        pf_estimate: Optional[Tensor] = None, # Current Pf estimate for reliability method (if applicable)
     ) -> List[int]:
         """
         Multi-objective selection via Pareto front.
-
-        method: 'knee' or 'compromise'
+        method: 'knee', 'compromise' or 'reliability'
         """
-        # Compute absolute mean for minimization
-        _, _, _, knee_idx, _, comp_idx, _ = self.compute_pareto_front(
-            torch.abs(mean_prediction), std_prediction
+        # Compute the Pareto front
+        mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
+        std_pred_norm = normalize_tensor(std_prediction)
+        pareto_front, pareto_front_indices, _, knee_idx, _, comp_idx, _ = self.compute_pareto_front(
+            mean_pred_norm, std_pred_norm
         )
+        # select the knee point, compromised point, or reliability point
         if method == 'knee':
-            return [int(knee_idx)]
+            return pareto_front, [int(knee_idx)]
         elif method == 'compromise':
-            return [int(comp_idx)]
+            return pareto_front, [int(comp_idx)]
+        elif method == 'reliability':
+            moo_pareto_index = self.get_moo_reliability(pareto_front=pareto_front, pf_estimate=pf_estimate)
+            return pareto_front, [pareto_front_indices[moo_pareto_index].item()]
         else:
             raise ValueError(f"Unknown MO pareto strategy: {method}")
 
