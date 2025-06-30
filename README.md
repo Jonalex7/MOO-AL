@@ -1,69 +1,93 @@
+# Active Learning Surrogate-Model Acquisition Strategies for reliability estimation
 
-# Batch Active Learning for Structural Reliability
+This repository implements several acquisition strategies for active learning of surrogate models for structural reliability estimation. You can choose different strategies (U‑function, EFF, or Pareto‑based) via configuration flags.
 
-In this repository, you can:
+---
 
-- Train a GP-based surrogate model through batch active learning. 
+## Prerequisites
 
-You can customize the active learning process, including target function, acquisition function, size of batch candidate samples, and experiment settings.
+The required Python packages are listed in `requirements.txt`:
 
-## To-do list
+```text
+numpy==1.26.1
+torch==2.4.0
+scikit-learn==1.5.1
+```
 
-- [x] Config files
-- [x] Parallel pf computation
-- [ ] Separate active learning modules
-- [x] Implemented MO selection
+Ensure you have Python 3.8+ installed.
 
-## Installation
+### Install dependencies
 
-TBD
+Use the provided requirements file to install all necessary packages:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## Project Structure
+
+```
+├── main.py          # Entry point for active learning loop
+├── acquisition.py   # AcquisitionStrategy class implementation
+├── config/          # YAML config files for different strategies
+└── README.md        # This file
+```
+
+---
 
 ## Usage
 
-To run experiments, run:
+Run the active learning loop by specifying one of the predefined configurations:
 
-```python
-python main_batchactive.py [-h] [--config [config file]] [--output [output file name]]
+```bash
+python main.py --config <AL_CONFIG>
 ```
-<!-- ## Arguments
-* `-h, --help` 
 
-  Shows a message listing the available arguments.
+### Available Configurations
 
-* ` --ls [LS]` 
-  ### Target Limit State [LS]
-  Specifies the target function to use in the active learning process. Options include:
+- `default_u`
 
-  `four_branch` (default)
-  
-  `himmelblau` 
-  
-  `pushover_frame` (Opeensees 2D Pushover Analysis of 2-Story Moment Frame)
+  - Strategy: U‑function (`acquisition_strategy='u'`)
+  - Picks points minimizing |μ|/σ.
 
-* `--al_f [AL_F]`
-  ### Active Learning Strategy [AL_F]
-  Specifies the strategy for batch active learning. Options include:
+- `default_eff`
 
-  `u_function` (default)
-  
-  `corr_det`
-  
-  `corr_eigen`
+  - Strategy: EFF (`acquisition_strategy='eff'`)
+  - Picks points maximizing the Expected Feasibility Function.
 
-  `corr_entropy`
+- `default_mook`
 
-  `corr_condvar`
-  
-  `random`
+  - Strategy: MOO‑knee (`acquisition_strategy='moo'`, `moo_method='knee'`)
+  - Pareto front; selects the knee point.
 
-* `--al_b [AL_B]`
-  ### Size for a batch of candidate samples [AL_B]
-  Defines the number of samples in each batch of candidates `int`. Default is 3.
+- `default_mooc`
 
-* `--seed [SEED]`
-  ### Random seed [SEED]
-  Sets the random seed for reproducibility `int`. If not specified, a random seed will be used.
+  - Strategy: MOO‑compromise (`acquisition_strategy='moo'`, `moo_method='compromise'`)
+  - Pareto front; selects the compromise (closest to ideal) point.
 
-* `--n_exp [N_EXP]`
-  ### Number of Experiments [N_EXP]
-  Sets the number of experiments to run under the given settings `int`.  Default is 1. -->
+- `default_moor`
+
+  - Strategy: MOO‑reliability (`acquisition_strategy='moo'`, `moo_method='moo_reliability'`)
+  - Pareto front with reliability adaptation (logistic gamma based on Pf changes).
+
+> **Note**: All Pareto‑based strategies compute the Pareto front once per iteration. You can enable the `pareto_metrics` flag in your config to record the full Pareto front and selected objective.
+
+---
+
+## Example Run
+
+```bash
+python main.py --config default_moor
+```
+
+This will:
+
+1. Load the `default_moor` config.
+2. Initialize `AcquisitionStrategy('moo', moo_method='moo_reliability', N_it=..., ...)`.
+3. In each iteration, pass `pf_estimate` to `strategy.get_indices(...)`.
+4. Optionally collect Pareto metrics if `pareto_metrics` is enabled.
+
+---
+
