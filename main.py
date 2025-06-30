@@ -18,15 +18,15 @@ from utils.data import isoprobabilistic_transform, custom_optimizer, parallel_pr
 
 def main(config, name_exp):
     # getting args from config file
-    casestudy = config['case_study'] 
-    al_strategy = config['al_strategy']
-    al_batch = config['al_batch'] 
+    casestudy = config['case_study'] # limit state to use
+    al_strategy = config['al_strategy'] # active learning strategy
+    al_batch = config['al_batch'] # number of samples to select at each iteration
     passive_samples = config['passive_samples'] # initial DoE with LHS
-    active_samples = config['active_samples'] # max number of samples
+    total_samples = config['total_samples'] # max number of samples
     n_mcs_pool = config['n_mcs_pool'] # n_MonteCarlo pool of samples for learning
     n_mcs_pf = config['n_mcs_pf']  # n_MonteCarlo pool of samples for pf estimation
     seed_exp = config['seed'] # seed for experiment
-    save_interval = config['save_interval'] 
+    save_interval = config['save_interval']  # interval to save model
 
     # Loading limit state and ref. Pf
     lstate = ls_REGISTRY[casestudy]()
@@ -36,14 +36,18 @@ def main(config, name_exp):
 
     # results directory
     date_time_stamp = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    results_dir = f'results/{casestudy}/{al_strategy}_{al_batch}_{name_exp}_{date_time_stamp}/'
+    if al_strategy == 'moo':
+        results_dir = f'results/{casestudy}/{al_strategy}_{config["moo_method"]}_{al_batch}_{name_exp}_{date_time_stamp}/'
+    else:
+        results_dir = f'results/{casestudy}/{al_strategy}_{al_batch}_{name_exp}_{date_time_stamp}/'
+
     store_model_dir = results_dir + 'model/'
 
     for dir_path in [results_dir, store_model_dir]:
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
-            
-    # results
+
+    # Store the evolution of Pf, pareto metrics, and training samples
     results_file = {}
     pf_evol = []
     pareto_metrics = []
@@ -62,36 +66,32 @@ def main(config, name_exp):
     # Store the config file as a json file
     with open(results_dir + 'config.json', 'w') as file_id:
         json.dump(config, file_id, indent=4)
-
-    print(f'Experiment settings: {config}')
     
     # Design of experiments
     x_train_norm, _ , y_train = lstate.get_doe(n_samples=passive_samples, method='lhs', random_state=random_state)
 
-    iterations = int((active_samples-passive_samples)/al_batch) + 1 # number of iterations
-
-    print(f'Reference Pf: {Pf_ref:.3E} \n')
+    iterations = int((total_samples-passive_samples)/al_batch) + 1 # number of iterations
 
     # Initializing the active learning strategy
     args_al = {
-    'acquisition_strategy': al_strategy
+    'acquisition_strategy': al_strategy,
+    'pareto_metrics': config['pareto_metrics'],  # If True, compute pareto front
     }
     # If moo strategy, add moo_method
     if al_strategy == 'moo':
-        args_al['moo_method'] = config['moo_method']    # 'knee'or 'compromised'
-
-    # If mo_reliability strategy, add relevant parameters
-    elif al_strategy == 'mo_reliability': 
-        N_it = config['N_it']  # Number of iterations to consider for moving average
-        delta_P0 = config['delta_p0'] 
-        k= config['k_balance']
-        Pf_prev = 0   
-        delta_Pf_buffer = [] 
+        args_al['moo_method'] = config['moo_method']    # 'knee', 'compromised' 'reliability'
+        # If moo_reliability strategy, add relevant parameters
+        if args_al['moo_method'] == 'reliability': 
+            args_al['N_it'] = config['N_it']  # Number of iterations to consider for moving average
+            args_al['delta_P0'] = config['delta_p0'] # (0,1) threshold of relative difference at which gamma=0.5
+            args_al['k_balance'] = config['k_balance'] # Positive constant controlling how quickly gamma transition from 0 to 1
+    
     # Initialize the acquisition strategy
     strategy = AcquisitionStrategy(**args_al)
 
     start_time = time.time()
-
+    print(f'Experiment settings: {config} \n')
+    print(f'Reference Pf: {Pf_ref:.3E} \n')
     # Active learning loop
     for it in range(iterations + 1):
         
@@ -123,65 +123,36 @@ def main(config, name_exp):
         # mean_prediction, std_prediction = model_gp.predict(x_mc_pool, return_std=True)
         mean_pred, std_pred = parallel_predict(model_gp, x_mc_pool)
 
-        # # Define the arguments for active learning
-        # args_al= {
-        #     # 'mean_prediction': mean_pred,
-        #     # 'std_prediction': std_pred,
-        #     'x_mc_pool': x_mc_pool,
-        #     'model': model_gp
-        # }
-
-        if config['pareto_metrics']:
-            # Compute pareto front with normalised objectives
+        # arguments for sampling
+        args_sampling = {'n_samples': 1, # Number of samples to select
+                        'skip_indices': None} # Indices to skip in the pool
+        
+        # If the strategy is 'moo', we need to add the Pf estimate for reliability-based method
+        if al_strategy == 'moo':
+            if args_al['moo_method'] == 'reliability': 
+                args_sampling = {'pf_estimate': Pf_model, # Current Pf estimate for reliability method
+                            } 
+        # Compute the indices to select based on the active learning strategy
+        if args_al['pareto_metrics']:
+            # If pareto metrics are enabled, we retrieve the pareto front and selected indices
+            pareto, selected_indices = strategy.get_indices(
+            mean_prediction=mean_pred,
+            std_prediction=std_pred,
+            **args_sampling
+            )
             mean_pred_norm = normalize_tensor(torch.abs(mean_pred))
             std_pred_norm = normalize_tensor(std_pred)
-            pareto_front, pareto_front_indices, _, knee_index, _, compromised_index, _ = active_learning.compute_pareto_front(mean_pred_norm, std_pred_norm)
-
-            # Select idx from pareto
-            if al_strategy == 'knee':
-                selected_indices = knee_index.tolist()
-            elif al_strategy == 'compromise':
-                selected_indices = compromised_index.tolist()
-            elif al_strategy == 'mo_reliability':
-                # Checking Pf rel. difference to choose gamma behaviour
-                Pf_current = Pf_model
-                if Pf_prev != 0:
-                    delta_Pf = abs(Pf_current - Pf_prev) / Pf_prev
-
-                else:
-                    delta_Pf = 1e2  # Handle division by zero
-
-                delta_Pf_buffer.append(delta_Pf)
-                if len(delta_Pf_buffer) > N_it:
-                    delta_Pf_buffer.pop(0)  # Keep only the last N values
-
-                delta_Pf_avg = np.mean(delta_Pf_buffer)
-                gamma = active_learning.logistic_gamma(delta_Pf_avg, delta_P0=delta_P0, k=k) # gamma : 0 to exploit - 1 to explore
-                print(f'delta_pf_avr: {delta_Pf_avg:.3f}, gamma_log: {gamma:.3f} \n')
-                Pf_prev = Pf_current
-                mo_pareto_index = active_learning.get_mo_reliability(gamma=gamma, pareto_front=pareto_front)  
-                selected_indices = [pareto_front_indices[mo_pareto_index].item()]
-
-            else:
-                # Select idx with U or EFF
-                selected_indices = active_learning.select_indices(al_strategy, **args_al) 
-
-            # Saving points for pareto metrics (first, last, and selected sample)
             selected_objective_norm = torch.tensor([mean_pred_norm[selected_indices], std_pred_norm[selected_indices]])
-            pareto_metrics.append((pareto_front[0].tolist(), pareto_front[-1].tolist(), selected_objective_norm.tolist()))
-
+            # Saving points for pareto metrics (full Pareto front, and selected sample)
+            pareto_metrics.append((pareto.tolist(), selected_objective_norm.tolist()))
         else:
-
-            args_sampling = {'n_samples': 1, # Number of samples to select
-                            'skip_indices': None} # Indices to skip in the pool
-              
-            # Select_indices method with the chosen active learning strategy
+        # retrieve the selected indices without pareto metrics
             selected_indices = strategy.get_indices(
             mean_prediction=mean_pred,
             std_prediction=std_pred,
             **args_sampling
             )
-            
+        
         # Get training and target samples
         selected_samples_norm = x_mc_pool[selected_indices]
 
