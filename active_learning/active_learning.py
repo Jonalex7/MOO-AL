@@ -193,3 +193,49 @@ class AcquisitionStrategy:
         dists = torch.norm(pareto_front - ideal, dim=1)
         idx = torch.argmin(dists)
         return pareto_front[idx], idx, ideal
+    
+    def logistic_gamma(self, delta_P, delta_P0=0.2, k=40):
+        gamma_max = 1.0
+        gamma = gamma_max*(1 / (1 + np.exp(-k * (delta_P - delta_P0))))
+        return gamma
+
+    def get_moo_reliability(self, pareto_front, pf_estimate):
+        # Checking Pf rel. difference to choose gamma behaviour
+        Pf_current = pf_estimate
+
+        # Calculate the relative difference from the previous Pf
+        if self.Pf_prev != 0:
+            delta_Pf = abs(Pf_current - self.Pf_prev) / self.Pf_prev
+        else:
+            delta_Pf = 1e2  # Handle division by zero
+
+        # Update the buffer with the latest delta_Pf
+        self.delta_Pf_buffer.append(delta_Pf)
+        if len(self.delta_Pf_buffer) > self.N_it:
+            self.delta_Pf_buffer.pop(0)  # Keep only the last N values
+
+        delta_avg = float(np.mean(self.delta_Pf_buffer))
+        # compute gamma and update Pf_prev
+        gamma = self.logistic_gamma(delta_avg, delta_P0=self.delta_P0, k=self.k_balance)
+        print(f'delta_pf_avg: {delta_avg:.3f}, gamma_log: {gamma:.3f} \n')
+        # Update previous Pf for next iteration
+        self.Pf_prev = Pf_current
+        # Extract mean predictions and standard deviations
+        mean_predictions = pareto_front[:, 0]
+        std_predictions = pareto_front[:, 1]
+        
+        # Normalize the objectives to [0, 1]
+        mean_min, mean_max = mean_predictions.min(), mean_predictions.max()
+        std_min, std_max = std_predictions.min(), std_predictions.max()
+        
+        normalized_mean = (mean_predictions - mean_min) / (mean_max - mean_min)
+        normalized_std = (std_predictions - std_min) / (std_max - std_min)
+        
+        # Calculate the scalar scores with the desired gamma mapping
+        scores = (1 - gamma) * normalized_mean + gamma * normalized_std
+
+        # Assign weights to samples
+        weights = scores / scores.sum()
+        arg_max = np.argmax(weights).item()
+        # mo_reliability = pareto_front[arg_max]
+        return arg_max
