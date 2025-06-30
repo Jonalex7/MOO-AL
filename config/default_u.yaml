@@ -1,0 +1,15 @@
+# --- active training options ---
+case_study: 'four_branch_6' # Specify target LS: four_branch_6, himmelblau,hat, damped_oscillator
+al_strategy: 'u'    #eff, u, moo
+al_batch: 1   # batch sample size per active iteration
+total_samples: 20   # max number of samples
+passive_samples: 10     # initial DoE with LHS
+n_mcs_pool: 1000000  # size of MonteCarlo pool candidates
+seed: null # null for random seed (default)
+
+# --- reliability estimation---
+n_mcs_pf: 10000000 # size of MonteCarlo sampling for pf estimation
+
+#--- output model----
+save_interval: 10 # Save model every n iterations
+pareto_metrics: True # If True, compute pareto 
