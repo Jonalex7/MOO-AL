@@ -130,8 +130,8 @@ def main(config, name_exp):
         # If the strategy is 'moo', we need to add the Pf estimate for reliability-based method
         if al_strategy == 'moo':
             if args_al['moo_method'] == 'reliability': 
-                args_sampling = {'pf_estimate': Pf_model, # Current Pf estimate for reliability method
-                            } 
+                args_sampling = ['pf_estimate']= Pf_model # Current Pf estimate for reliability method
+
         # Compute the indices to select based on the active learning strategy
         if args_al['pareto_metrics']:
             # If pareto metrics are enabled, we retrieve the pareto front and selected indices
