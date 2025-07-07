@@ -1,0 +1,21 @@
+# --- active training options ---
+case_study: 'four_branch_6' # Specify target LS: four_branch_6, himmelblau,hat, damped_oscillator
+al_strategy: 'moo'    #eff, u, moo
+moo_method: 'reliability' #knee, compromise, reliability
+al_batch: 1   # batch sample size per active iteration
+total_samples: 15   # max number of acquired samples
+passive_samples: 10     # initial DoE with LHS
+n_mcs_pool: 1000000  # size of MonteCarlo pool candidates
+seed: null # null for random seed (default)
+
+# --- MO reliability trade-off (gamma) control ---
+N_it: 2 # Number of iterations to consider for moving average
+delta_p0: 0.2 # threshold of relative difference at which gamma=0.5
+k_balance: 40 # Positive constant controlling how quickly gamma transition from 0 to 1
+
+# --- reliability estimation---
+n_mcs_pf: 10000000 # size of MonteCarlo sampling for pf estimation
+
+#--- output model----
+save_interval: 10
+pareto_metrics: True # Save Pareto metrics for each iteration

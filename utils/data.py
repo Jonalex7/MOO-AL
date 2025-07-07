@@ -82,22 +82,3 @@ def normalize_tensor(tensor):
     min_vals = tensor.min(dim=0, keepdim=True).values
     max_vals = tensor.max(dim=0, keepdim=True).values
     return (tensor - min_vals) / (max_vals - min_vals)
-
-def distances_in_pareto(sample, pareto_front):
-    # Define the line between the first and last point in the Pareto front
-    p1, p2 = pareto_front[0], pareto_front[-1]
-    line_vec = p2 - p1
-    line_vec /= torch.norm(line_vec)
-
-    # Calculate the vector from p1 to the specified point
-    point_vec = sample - p1
-    # Project this vector onto the line
-    proj_len = torch.dot(point_vec, line_vec)
-    proj_point = p1 + proj_len * line_vec
-    # Calculate the perpendicular distance from the point to the line
-    perpendicular_distance = torch.norm(sample - proj_point)
-
-    # Calculate the distance to extreme points
-    distance_to_extremes = (sample - p2) / (p1 - p2)
-    
-    return perpendicular_distance, distance_to_extremes.mean()
