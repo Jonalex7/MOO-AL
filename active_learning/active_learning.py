@@ -77,6 +77,41 @@ class AcquisitionStrategy:
                 return pareto, selected_indices
             else:
                 return selected_indices
+                # EFF-based selection
+
+        elif self.strategy == "erf":
+            selected_indices = self._erf_function(mean_prediction, std_prediction, n_samples, skip_indices)
+            if self.pareto_metrics:
+                mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
+                std_pred_norm = normalize_tensor(std_prediction)
+                pareto, _, _, _, _, _, _ = self.compute_pareto_front(
+                    mean_pred_norm, std_pred_norm)
+                return pareto, selected_indices
+            else:
+                return selected_indices
+        
+        elif self.strategy == "reif":
+            selected_indices = self._reif_function(mean_prediction, std_prediction, n_samples, skip_indices)
+            if self.pareto_metrics:
+                mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
+                std_pred_norm = normalize_tensor(std_prediction)
+                pareto, _, _, _, _, _, _ = self.compute_pareto_front(
+                    mean_pred_norm, std_pred_norm)
+                return pareto, selected_indices
+            else:
+                return selected_indices
+        
+        elif self.strategy == "reif2":
+            selected_indices = self._reif2_function(mean_prediction, std_prediction, n_samples, skip_indices)
+            if self.pareto_metrics:
+                mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
+                std_pred_norm = normalize_tensor(std_prediction)
+                pareto, _, _, _, _, _, _ = self.compute_pareto_front(
+                    mean_pred_norm, std_pred_norm)
+                return pareto, selected_indices
+            else:
+                return selected_indices
+            
         else:
             raise ValueError(f"Unknown acquisition strategy '{self.strategy}'")
 
@@ -125,6 +160,110 @@ class AcquisitionStrategy:
             eff[skip_indices] = float('-inf')
         _, eff_idx = eff.squeeze().topk(n_samples)
         return eff_idx.tolist()
+
+    def _erf_function(
+        self,
+        mean_prediction: torch.Tensor,
+        std_prediction: torch.Tensor,
+        n_samples: int,                         # number of samples to select
+        skip_indices: Optional[List[int]] = None  # indices to skip in the pool
+    ) -> List[int]:
+        """
+        Expected Risk Function (ERF) sampling criterion.
+        Selects the indices corresponding to the largest ERF values.
+        Reference: Yang et al. (2015) ALK-HRA with Expected Risk Function.
+        """
+        mu = mean_prediction.squeeze()
+        sig = std_prediction.squeeze()
+
+        sgn = torch.where(mu >= 0, torch.tensor(1.0), torch.tensor(-1.0))
+        z = mu / sig
+
+        phi = torch.from_numpy(norm.pdf(z.numpy()))
+        Phi_neg = torch.from_numpy(norm.cdf((-sgn * z).numpy()))
+
+        erf_val = -sgn * mu * Phi_neg + sig * phi  # larger = higher expected risk
+
+        if skip_indices is not None:
+            erf_val[skip_indices] = float('-inf')
+
+        _, idx = erf_val.topk(n_samples, largest=True)
+        return idx.tolist()
+
+    def _reif_function(
+        self,
+        mean_prediction: torch.Tensor,
+        std_prediction: torch.Tensor,
+        n_samples: int,
+        skip_indices: Optional[List[int]] = None,
+        w: float = 2.0,  # as suggested in the paper
+    ) -> List[int]:
+        """
+        REIF selector (maximize): REIF = w*σ - E[|ĝ|],
+        where E[|N(μ, σ²)|] = σ*sqrt(2/pi)*exp(-0.5*(μ/σ)^2) + μ*(1 - 2*Φ(μ/σ))
+        Reference: Zhang, Wang & Sørensen (2019), RESS. REIF/REIF2. 
+        """
+        mu = mean_prediction.squeeze()
+        sig = std_prediction.squeeze()
+
+        # compute beta = mu/sig
+        beta_np = (mu / sig).numpy()
+        Phi_beta = torch.from_numpy(norm.cdf(beta_np))
+
+        # folded-normal expectation E|ĝ|
+        term_var = sig * np.sqrt(2.0/np.pi) * torch.exp(-0.5 * (mu/sig)**2)
+        term_mean = mu * (1.0 - 2.0 * Phi_beta)
+        e_abs = term_var + term_mean
+
+        reif = w * sig - e_abs  # larger is better
+
+        if skip_indices:
+            reif[skip_indices] = float('-inf')
+
+        k = min(n_samples, reif.numel() - (len(skip_indices) if skip_indices else 0))
+        if k <= 0:
+            return []
+        _, idx = reif.topk(k, largest=True)
+        return idx.tolist()
+
+
+    def _reif2_function(
+        self,
+        mean_prediction: torch.Tensor,
+        std_prediction: torch.Tensor,
+        pdf_values: torch.Tensor,   # f_X(x) evaluated at each candidate (same shape as mu)
+        n_samples: int,
+        skip_indices: Optional[List[int]] = None,
+        w: float = 2.0,
+    ) -> List[int]:
+        """
+        REIF2 selector (maximize): REIF2 = REIF * f_X(x).
+        Same REIF core as above, with multiplicative modulation by the input PDF.
+        Reference: Zhang, Wang & Sørensen (2019), RESS. REIF/REIF2.
+        """
+        mu = mean_prediction.squeeze()
+        sig = std_prediction.squeeze()
+        fx = pdf_values.squeeze()
+
+        beta_np = (mu / sig).numpy()
+        Phi_beta = torch.from_numpy(norm.cdf(beta_np))
+
+        term_var = sig * np.sqrt(2.0/np.pi) * torch.exp(-0.5 * (mu/sig)**2)
+        term_mean = mu * (1.0 - 2.0 * Phi_beta)
+        e_abs = term_var + term_mean
+
+        reif = w * sig - e_abs
+        reif2 = reif * fx  # modulation by joint PDF
+
+        if skip_indices:
+            reif2[skip_indices] = float('-inf')
+
+        k = min(n_samples, reif2.numel() - (len(skip_indices) if skip_indices else 0))
+        if k <= 0:
+            return []
+        _, idx = reif2.topk(k, largest=True)
+        return idx.tolist()
+
 
     def get_moo(
         self,
