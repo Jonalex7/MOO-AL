@@ -40,6 +40,7 @@ class AcquisitionStrategy:
         self,
         mean_prediction: Tensor, # Mean predictions from the model
         std_prediction: Tensor, # Standard deviations from the model
+        input_candidates: Optional[Tensor] = None,
         n_samples: int = 1, # Number of samples to select
         skip_indices: Optional[List[int]] = None, # Indices to skip in the pool
         constant: float = 2.0, # Constant for EFF function
@@ -102,7 +103,7 @@ class AcquisitionStrategy:
                 return selected_indices
         
         elif self.strategy == "reif2":
-            selected_indices = self._reif2_function(mean_prediction, std_prediction, n_samples, skip_indices)
+            selected_indices = self._reif2_function(mean_prediction, std_prediction, input_candidates, n_samples, skip_indices)
             if self.pareto_metrics:
                 mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
                 std_pred_norm = normalize_tensor(std_prediction)
@@ -207,15 +208,14 @@ class AcquisitionStrategy:
         sig = std_prediction.squeeze()
 
         # compute beta = mu/sig
-        beta_np = (mu / sig).numpy()
-        Phi_beta = torch.from_numpy(norm.cdf(beta_np))
+        beta_np = (mu / sig)
+        Phi_beta = torch.from_numpy(norm.cdf(beta_np.numpy()))
 
         # folded-normal expectation E|ĝ|
-        term_var = sig * np.sqrt(2.0/np.pi) * torch.exp(-0.5 * (mu/sig)**2)
+        term_var = (w - np.sqrt(2.0/np.pi) * torch.exp(-0.5 * (beta_np)**2))
         term_mean = mu * (1.0 - 2.0 * Phi_beta)
-        e_abs = term_var + term_mean
 
-        reif = w * sig - e_abs  # larger is better
+        reif = term_mean + sig * term_var # larger is better
 
         if skip_indices:
             reif[skip_indices] = float('-inf')
@@ -225,13 +225,12 @@ class AcquisitionStrategy:
             return []
         _, idx = reif.topk(k, largest=True)
         return idx.tolist()
-
-
+    
     def _reif2_function(
         self,
         mean_prediction: torch.Tensor,
         std_prediction: torch.Tensor,
-        pdf_values: torch.Tensor,   # f_X(x) evaluated at each candidate (same shape as mu)
+        input_candidates: torch.Tensor,   # f_X(x) evaluated at each candidate (same shape as mu)
         n_samples: int,
         skip_indices: Optional[List[int]] = None,
         w: float = 2.0,
@@ -243,17 +242,18 @@ class AcquisitionStrategy:
         """
         mu = mean_prediction.squeeze()
         sig = std_prediction.squeeze()
-        fx = pdf_values.squeeze()
+        fx = self.std_normal_pdf_product(input_candidates)
 
-        beta_np = (mu / sig).numpy()
-        Phi_beta = torch.from_numpy(norm.cdf(beta_np))
+        # compute beta = mu/sig
+        beta_np = (mu / sig)
+        Phi_beta = torch.from_numpy(norm.cdf(beta_np.numpy()))
 
-        term_var = sig * np.sqrt(2.0/np.pi) * torch.exp(-0.5 * (mu/sig)**2)
+        # folded-normal expectation E|ĝ|
+        term_var = (w - np.sqrt(2.0/np.pi) * torch.exp(-0.5 * (beta_np)**2))
         term_mean = mu * (1.0 - 2.0 * Phi_beta)
-        e_abs = term_var + term_mean
 
-        reif = w * sig - e_abs
-        reif2 = reif * fx  # modulation by joint PDF
+        reif = term_mean + sig * term_var # larger is better
+        reif2 = reif * fx
 
         if skip_indices:
             reif2[skip_indices] = float('-inf')
@@ -263,7 +263,6 @@ class AcquisitionStrategy:
             return []
         _, idx = reif2.topk(k, largest=True)
         return idx.tolist()
-
 
     def get_moo(
         self,
@@ -337,6 +336,11 @@ class AcquisitionStrategy:
         gamma_max = 1.0
         gamma = gamma_max*(1 / (1 + np.exp(-k * (delta_P - delta_P0))))
         return gamma
+    
+    def std_normal_pdf_product(self, input_candidates: np.ndarray) -> torch.Tensor:
+        pdf = norm.pdf(input_candidates)                 # (N, D)
+        pdf_joint = pdf.prod(axis=1)              # independent product
+        return torch.from_numpy(pdf_joint)
 
     def get_moo_reliability(self, pareto_front, pf_estimate):
         # Checking Pf rel. difference to choose gamma behaviour
