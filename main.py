@@ -131,6 +131,9 @@ def main(config, name_exp):
         if al_strategy == 'moo':
             if args_al['moo_method'] == 'reliability': 
                 args_sampling['pf_estimate'] = Pf_model # Current Pf estimate for reliability method
+        
+        if al_strategy == 'reif2':
+            args_sampling['input_candidates'] = x_mc_pool
 
         # Compute the indices to select based on the active learning strategy
         if args_al['pareto_metrics']:
