@@ -9,7 +9,7 @@ import torch
 import numpy as np
 import yaml
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import Matern
+from sklearn.gaussian_process.kernels import Matern, ConstantKernel
 from scipy.stats import norm
 
 from limit_states import REGISTRY as ls_REGISTRY
@@ -98,7 +98,12 @@ def main(config, name_exp):
         print(f'Training size: {len(x_train_norm)} samples', end=" ")
 
         # Train the Gaussian Process model
-        kernel = 1.0 * Matern(length_scale=1.0, nu=1.5)
+        length_init = np.full(lstate.input_dim, 1.0, dtype=np.float64)
+        # --- Define anisotropic Matérn kernel ('matern-5_2') ---
+        kernel = ConstantKernel(1.0, (1e-5, 1e5)) * \
+                Matern(length_scale=length_init,
+                        length_scale_bounds=(1e-5, 1e5),
+                        nu=2.5)
         model_gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=9, normalize_y=True, optimizer=custom_optimizer)
         model_gp.fit(x_train_norm, y_train)
 
