@@ -109,8 +109,9 @@ def main(config, name_exp):
 
         # Pf estimation with MCs
         x_mcs_pf = np.random.normal(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
-        mean_pf, _ = parallel_predict(model_gp, x_mcs_pf)
-        Pf_model = (torch.sum(mean_pf < 0) / len(mean_pf)).item()
+        mean_pf_np = model_gp.predict(x_mcs_pf, return_std=False)
+        mean_pf = torch.as_tensor(mean_pf_np, dtype=torch.float64).squeeze()
+        Pf_model = (mean_pf < 0.0).double().mean().item()
         pf_evol.append(Pf_model)
 
         # reliability index, B
@@ -125,9 +126,10 @@ def main(config, name_exp):
 
         # Making predictions of mean and std for mc population 
         x_mc_pool = np.random.normal(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
-        # mean_prediction, std_prediction = model_gp.predict(x_mc_pool, return_std=True)
-        mean_pred, std_pred = parallel_predict(model_gp, x_mc_pool)
-
+        mean_pred_np, std_pred_np = model_gp.predict(x_mc_pool, return_std=True)
+        mean_pred = torch.as_tensor(mean_pred_np, dtype=torch.float64).squeeze()
+        std_pred  = torch.as_tensor(std_pred_np,  dtype=torch.float64).squeeze()
+        
         # arguments for sampling
         args_sampling = {'n_samples': 1, # Number of samples to select
                         'skip_indices': None} # Indices to skip in the pool
