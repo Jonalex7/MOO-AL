@@ -14,7 +14,7 @@ from scipy.stats import norm
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import AcquisitionStrategy
-from utils.data import isoprobabilistic_transform, custom_optimizer, parallel_predict, normalize_tensor
+from utils.data import isoprobabilistic_transform, custom_optimizer, normalize_tensor
 
 def main(config, name_exp):
     # getting args from config file
