@@ -18,21 +18,31 @@ class AcquisitionStrategy:
         delta_P0: float = 0.2, # (0,1) threshold of relative difference at which gamma=0.5
         k_balance: float = 40,  # Positive constant controlling how quickly gamma transition from 0 to 1
         pareto_metrics: bool = False, # If True, returns Pareto front and selected indices
+        eps_start: float = 1.0,     # start fully exploratory
+        eps_end: float = 0.0,       # end fully exploitative
+        eps_T: int = 100             # number of calls to decay over
     ):
         self.strategy = acquisition_strategy.lower().strip()
 
         if self.strategy == "moo":
-            if moo_method not in ("knee", "compromise", "reliability"):
-                raise ValueError("`moo_method` must be 'knee', 'compromise' or 'reliability'")
+            if moo_method not in ("knee", "compromise", "reliability", "eps_greedy"):
+                raise ValueError("`moo_method` must be 'knee', 'compromise', 'reliability', or 'eps_greedy'")
             self.moo_method = moo_method
         
-        # Initialize reliability parameters only when using moo_reliability
-        if self.strategy == "moo" and self.moo_method == "reliability":
-            self.N_it = N_it
-            self.delta_P0 = delta_P0
-            self.k_balance = k_balance
-            self.Pf_prev = 0.0
-            self.delta_Pf_buffer: List[float] = []
+            # Initialize reliability parameters only when using moo_reliability
+            if self.moo_method == "reliability":
+                self.N_it = N_it
+                self.delta_P0 = delta_P0
+                self.k_balance = k_balance
+                self.Pf_prev = 0.0
+                self.delta_Pf_buffer: List[float] = []
+
+            # epsilon-greedy schedule state
+            if self.moo_method == "eps_greedy":
+                self.eps_start = float(eps_start)
+                self.eps_end   = float(eps_end)
+                self.eps_T     = int(eps_T)
+                self._eps_t    = 0  # internal call counter
 
         self.pareto_metrics = pareto_metrics
 
@@ -289,6 +299,9 @@ class AcquisitionStrategy:
         elif method == 'reliability':
             moo_pareto_index = self.get_moo_reliability(pareto_front=pareto_front, pf_estimate=pf_estimate)
             return pareto_front, [pareto_front_indices[moo_pareto_index].item()]
+        elif method == 'eps_greedy':
+            pos_on_front = self.get_moo_eps_greedy(pareto_front)
+            return pareto_front, [pareto_front_indices[pos_on_front].item()]
         else:
             raise ValueError(f"Unknown MO pareto strategy: {method}")
 
@@ -382,3 +395,28 @@ class AcquisitionStrategy:
         arg_max = np.argmax(weights).item()
         # mo_reliability = pareto_front[arg_max]
         return arg_max
+    
+    def _eps_value(self) -> float:
+        """Linear decay epsilon in [eps_start -> eps_end] over eps_T calls."""
+        if self.eps_T <= 0:
+            return self.eps_end
+        frac = min(1.0, self._eps_t / self.eps_T)
+        return self.eps_start + (self.eps_end - self.eps_start) * frac
+
+    def get_moo_eps_greedy(self, pareto_front: torch.Tensor) -> int:
+        """
+        Deterministic epsilon-greedy along the sorted Pareto front.
+        Maps epsilon to a position from 0 (explore) -> K-1 (exploit).
+        """
+        K = pareto_front.size(0)
+        if K == 0:
+            raise ValueError("Empty Pareto front.")
+        eps = self._eps_value()              # 1.0 -> 0.0 over time
+        pos = int(round((1.0 - eps) * (K - 1)))
+        pos = max(0, min(K - 1, pos))        # clamp
+        self._eps_t += 1                      # advance schedule after each use
+        return pos
+
+    def reset_eps_schedule(self):
+        """Optional: call this if you want to restart from full exploration."""
+        self._eps_t = 0
