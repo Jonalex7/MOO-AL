@@ -95,7 +95,7 @@ def main(config, name_exp):
     # Active learning loop
     for it in range(iterations + 1):
         
-        print(f'Training size: {len(x_train_norm)} samples', end=" ")
+        print(f'Training size: {len(x_train_norm)} samples |', end=" ")
 
         # Train the Gaussian Process model
         length_init = np.full(lstate.input_dim, 1.0, dtype=np.float64)
@@ -121,8 +121,8 @@ def main(config, name_exp):
         # check beta stability
         b_stab = np.abs(B_model - b_j) / B_model   # relative difference with previous beta
         b_j = B_model  # Update b_j for the next iteration
-        
-        print(f'Pf_ref: {Pf_ref:.3E}, Pf_model: {Pf_model:.3E}, B_rel_diff: {B_rel_diff.item():.2%}, B_stab: {b_stab:.1%}')
+
+        print(f'Pf_model: {Pf_model:.3E}, Pf_rel_diff: {Pf_rel_diff:.2%}, B_rel_diff: {B_rel_diff.item():.2%}, B_stab: {b_stab:.1%}')
 
         # Making predictions of mean and std for mc population 
         x_mc_pool = np.random.normal(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
