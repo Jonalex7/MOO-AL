@@ -14,7 +14,7 @@ from scipy.stats import norm
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import AcquisitionStrategy
-from utils.data import isoprobabilistic_transform, custom_optimizer, normalize_tensor
+from utils.data import isoprobabilistic_transform, custom_optimizer, normalize_tensor, parallel_predict
 
 def main(config, name_exp):
     # getting args from config file
@@ -109,9 +109,9 @@ def main(config, name_exp):
 
         # Pf estimation with MCs
         x_mcs_pf = np.random.normal(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
-        mean_pf_np = model_gp.predict(x_mcs_pf, return_std=False)
-        mean_pf = torch.as_tensor(mean_pf_np, dtype=torch.float64).squeeze()
+        mean_pf, _ = parallel_predict(model_gp, x_mcs_pf)
         Pf_model = (mean_pf < 0.0).double().mean().item()
+        Pf_rel_diff = (Pf_model - Pf_ref) / Pf_ref
         pf_evol.append(Pf_model)
 
         # reliability index, B
@@ -126,9 +126,7 @@ def main(config, name_exp):
 
         # Making predictions of mean and std for mc population 
         x_mc_pool = np.random.normal(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
-        mean_pred_np, std_pred_np = model_gp.predict(x_mc_pool, return_std=True)
-        mean_pred = torch.as_tensor(mean_pred_np, dtype=torch.float64).squeeze()
-        std_pred  = torch.as_tensor(std_pred_np,  dtype=torch.float64).squeeze()
+        mean_pred, std_pred = parallel_predict(model_gp, x_mc_pool)
         
         # arguments for sampling
         args_sampling = {'n_samples': 1, # Number of samples to select
