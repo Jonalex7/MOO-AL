@@ -95,7 +95,7 @@ def main(config, name_exp):
     # Active learning loop
     for it in range(iterations + 1):
         
-        print(f'Training size: {len(x_train_norm)} samples |', end=" ")
+        print(f'Training samples: {len(x_train_norm)} |', end=" ")
 
         # Train the Gaussian Process model
         length_init = np.full(lstate.input_dim, 1.0, dtype=np.float64)
