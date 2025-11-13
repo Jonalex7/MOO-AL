@@ -86,6 +86,11 @@ def main(config, name_exp):
             args_al['delta_P0'] = config['delta_p0'] # (0,1) threshold of relative difference at which gamma=0.5
             args_al['k_balance'] = config['k_balance'] # Positive constant controlling how quickly gamma transition from 0 to 1
     
+        if args_al['moo_method'] == "eps_greedy":
+            args_al['eps_start'] = config['eps_start']  # Initial epsilon value
+            args_al['eps_end'] = config['eps_end']      # Final epsilon value
+            args_al['eps_T'] = config['eps_T']          # Number of iterations to decay over
+            
     # Initialize the acquisition strategy
     strategy = AcquisitionStrategy(**args_al)
 
