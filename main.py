@@ -114,7 +114,11 @@ def main(config, name_exp):
             args_al['eps_start'] = config['eps_start']  # Initial epsilon value
             args_al['eps_end'] = config['eps_end']      # Final epsilon value
             args_al['eps_T'] = config['eps_T']          # Number of iterations to decay over
-            
+
+    if al_strategy == "portfolio":
+        args_al['portfolio_lambda'] = config['portfolio_lambda']  # Hedge balance (λ)
+        args_al['portfolio_delta'] = config['portfolio_delta']    # Memory factor (δ)
+        
     # Initialize the acquisition strategy
     strategy = AcquisitionStrategy(**args_al)
     
