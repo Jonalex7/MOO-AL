@@ -20,7 +20,9 @@ class AcquisitionStrategy:
         pareto_metrics: bool = False, # If True, returns Pareto front and selected indices
         eps_start: float = 1.0,     # start fully exploratory
         eps_end: float = 0.0,       # end fully exploitative
-        eps_T: int = 100             # number of calls to decay over
+        eps_T: int = 100,             # number of calls to decay over
+        portfolio_lambda: float = 2.0,   # Hedge balance (λ)
+        portfolio_delta: float = 0.7,    # Memory factor (δ)
     ):
         self.strategy = acquisition_strategy.lower().strip()
 
@@ -28,7 +30,6 @@ class AcquisitionStrategy:
             if moo_method not in ("knee", "compromise", "reliability", "eps_greedy"):
                 raise ValueError("`moo_method` must be 'knee', 'compromise', 'reliability', or 'eps_greedy'")
             self.moo_method = moo_method
-        
             # Initialize reliability parameters only when using moo_reliability
             if self.moo_method == "reliability":
                 self.N_it = N_it
@@ -36,7 +37,6 @@ class AcquisitionStrategy:
                 self.k_balance = k_balance
                 self.Pf_prev = 0.0
                 self.delta_Pf_buffer: List[float] = []
-
             # epsilon-greedy schedule state
             if self.moo_method == "eps_greedy":
                 self.eps_start = float(eps_start)
@@ -44,7 +44,23 @@ class AcquisitionStrategy:
                 self.eps_T     = int(eps_T)
                 self._eps_t    = 0  # internal call counter
 
-        self.pareto_metrics = pareto_metrics
+        # --- NEW: portfolio init ---
+        if self.strategy == "portfolio":
+            # order of arms (must match the call sequence below)
+            self._arms: List[str] = ["u", "eff", "erf", "reif", "reif2"]
+            self._K = len(self._arms)
+
+            # Hedge state: total rewards G_i and probabilities p_i
+            self._G = torch.zeros(self._K, dtype=torch.float64)                 # totals
+            self._p = torch.full((self._K,), 1.0/self._K, dtype=torch.float64)  # probs
+
+            self._lambda = float(portfolio_lambda)
+            self._delta  = float(portfolio_delta)
+
+            # tracking which arm selected each iteration
+            self.portfolio_history: List[str] = []
+            # counts per arm
+            self.portfolio_counts = {a: 0 for a in self._arms}
 
     def get_indices(
         self,
@@ -66,6 +82,21 @@ class AcquisitionStrategy:
                 return pareto, selected_indices
             else:
                 return selected_indices
+
+        # ---------- Non-MOO strategies (all handled uniformly) ----------
+        # Portfolio: always select *one* sample via the portfolio step
+        if self.strategy == "portfolio":
+            if n_samples != 1:
+                raise ValueError("Portfolio strategy currently supports n_samples=1 only.")
+
+            idx = self._portfolio_step(
+                mean_prediction=mean_prediction,
+                std_prediction=std_prediction,
+                input_candidates=input_candidates,
+                skip_indices=skip_indices,
+            )
+            selected_indices = [idx]
+
         # U-based selection
         if self.strategy == "u":
             selected_indices = self._u_function(mean_prediction, std_prediction, n_samples, skip_indices)
@@ -420,3 +451,62 @@ class AcquisitionStrategy:
     def reset_eps_schedule(self):
         """Optional: call this if you want to restart from full exploration."""
         self._eps_t = 0
+
+    def _portfolio_step(
+        self,
+        mean_prediction: torch.Tensor,
+        std_prediction: torch.Tensor,
+        input_candidates: Optional[torch.Tensor],  # needed for REIF2
+        skip_indices: Optional[List[int]] = None
+    ) -> int:
+        """
+        One Hedge update + selection:
+        - Each arm proposes its best idx
+        - Reward r_i = -|mu(best_i)|
+        - Totals G_i <- δ G_i + r_i
+        - p_i = softmax(λ * normalized(G))
+        - Sample one arm by p_i and return its idx
+        """
+        if input_candidates is None:
+            # Only REIF2 needs candidates; we still require it here to keep interface simple
+            raise ValueError("`input_candidates` (N,D) is required (for REIF2 portfolio arm).")
+        mu = mean_prediction.squeeze().to(torch.float64)
+        sig = std_prediction.squeeze().to(torch.float64)
+
+        # 1) Each arm proposes best index (reuses your existing functions)
+        arm_best: List[int] = []
+        arm_best.append(self._u_function(mu, sig, n_samples=1, skip_indices=skip_indices)[0])
+        arm_best.append(self._eff_function(mu, sig, n_samples=1, skip_indices=skip_indices)[0])
+        arm_best.append(self._erf_function(mu, sig, n_samples=1, skip_indices=skip_indices)[0])
+        arm_best.append(self._reif_function(mu, sig, n_samples=1, skip_indices=skip_indices)[0])
+        arm_best.append(self._reif2_function(mu, sig, input_candidates, n_samples=1, skip_indices=skip_indices)[0])
+
+        # 2) rewards r_i = -|mu(best_i)|
+        mu_best = mu[torch.as_tensor(arm_best, dtype=torch.long)]
+        rewards = -mu_best.abs().to(torch.float64)
+
+        # 3) totals update with memory
+        self._G = self._delta * self._G + rewards
+
+        # 4) probabilities via softmax on normalized totals
+        Gmax = float(self._G.max())
+        Gmin = float(self._G.min())
+        if Gmax == Gmin:
+            self._p = torch.full((self._K,), 1.0 / self._K, dtype=torch.float64)
+        else:
+            q = (self._G - Gmax) / (Gmax - Gmin)   # ∈ [-1,0]
+            logits = self._lambda * q
+            m = float(logits.max())
+            expv = torch.exp(logits - m)
+            self._p = expv / expv.sum()
+
+        # 5) sample one arm and return its proposed index
+        arm_idx = int(np.random.choice(self._K, p=self._p.numpy()))
+        chosen_idx = int(arm_best[arm_idx])
+
+        # tracking
+        chosen_arm = self._arms[arm_idx]
+        self.portfolio_history.append(chosen_arm)
+        self.portfolio_counts[chosen_arm] += 1
+
+        return chosen_idx
