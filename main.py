@@ -190,8 +190,8 @@ def main(config, name_exp):
         B_rel_diff = (B_model-B_ref)/B_ref
 
         # check beta stability
-        b_stab = np.abs(B_model - b_j) / B_model   # relative difference with previous beta
-        b_j = B_model  # Update b_j for the next iteration
+        # b_stab = np.abs(B_model - b_j) / B_model   # relative difference with previous beta
+        # b_j = B_model  # Update b_j for the next iteration
 
         print(f'Pf_model: {Pf_model:.3E}, Pf_rel_diff: {Pf_rel_diff:.2%}, B_rel_diff: {B_rel_diff.item():.2%}, B_stab: {b_stab:.1%}')
 
