@@ -25,6 +25,7 @@ class AcquisitionStrategy:
         portfolio_delta: float = 0.7,    # Memory factor (δ)
     ):
         self.strategy = acquisition_strategy.lower().strip()
+        self.pareto_metrics = pareto_metrics
 
         if self.strategy == "moo":
             if moo_method not in ("knee", "compromise", "reliability", "eps_greedy"):
@@ -64,20 +65,23 @@ class AcquisitionStrategy:
 
     def get_indices(
         self,
-        mean_prediction: Tensor, # Mean predictions from the model
-        std_prediction: Tensor, # Standard deviations from the model
+        mean_prediction: Tensor,
+        std_prediction: Tensor,
         input_candidates: Optional[Tensor] = None,
-        n_samples: int = 1, # Number of samples to select
-        skip_indices: Optional[List[int]] = None, # Indices to skip in the pool
-        constant: float = 2.0, # Constant for EFF function
-        pf_estimate: Optional[float] = None # Current Pf estimate for reliability method (if applicable)
+        n_samples: int = 1,
+        skip_indices: Optional[List[int]] = None,
+        constant: float = 2.0,
+        pf_estimate: Optional[float] = None
     ) -> List[int]:
-        
-        # Get indices based on the acquisition strategy
-        # If pareto metrics are requested, compute and return the Pareto front
-        # MOO-based selection
+
+        # ---------- MOO-based selection  ----------
         if self.strategy == "moo":
-            pareto, selected_indices = self.get_moo(mean_prediction, std_prediction, self.moo_method, pf_estimate=pf_estimate)
+            pareto, selected_indices = self.get_moo(
+                mean_prediction,
+                std_prediction,
+                self.moo_method,
+                pf_estimate=pf_estimate
+            )
             if self.pareto_metrics:
                 return pareto, selected_indices
             else:
@@ -98,64 +102,63 @@ class AcquisitionStrategy:
             selected_indices = [idx]
 
         # U-based selection
-        if self.strategy == "u":
-            selected_indices = self._u_function(mean_prediction, std_prediction, n_samples, skip_indices)
-            if self.pareto_metrics:
-                mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
-                std_pred_norm = normalize_tensor(std_prediction)
-                pareto, _, _, _, _, _, _ = self.compute_pareto_front(
-                    mean_pred_norm, std_pred_norm)
-                return pareto, selected_indices
-            else:
-                return selected_indices
+        elif self.strategy == "u":
+            selected_indices = self._u_function(
+                mean_prediction,
+                std_prediction,
+                n_samples,
+                skip_indices,
+            )
+
         # EFF-based selection
         elif self.strategy == "eff":
-            selected_indices = self._eff_function(mean_prediction, std_prediction, n_samples, skip_indices, constant)
-            if self.pareto_metrics:
-                mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
-                std_pred_norm = normalize_tensor(std_prediction)
-                pareto, _, _, _, _, _, _ = self.compute_pareto_front(
-                    mean_pred_norm, std_pred_norm)
-                return pareto, selected_indices
-            else:
-                return selected_indices
-                # EFF-based selection
+            selected_indices = self._eff_function(
+                mean_prediction,
+                std_prediction,
+                n_samples,
+                skip_indices,
+                constant,
+            )
 
+        # ERF-based selection
         elif self.strategy == "erf":
-            selected_indices = self._erf_function(mean_prediction, std_prediction, n_samples, skip_indices)
-            if self.pareto_metrics:
-                mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
-                std_pred_norm = normalize_tensor(std_prediction)
-                pareto, _, _, _, _, _, _ = self.compute_pareto_front(
-                    mean_pred_norm, std_pred_norm)
-                return pareto, selected_indices
-            else:
-                return selected_indices
-        
+            selected_indices = self._erf_function(
+                mean_prediction,
+                std_prediction,
+                n_samples,
+                skip_indices,
+            )
+
+        # REIF-based selection
         elif self.strategy == "reif":
-            selected_indices = self._reif_function(mean_prediction, std_prediction, n_samples, skip_indices)
-            if self.pareto_metrics:
-                mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
-                std_pred_norm = normalize_tensor(std_prediction)
-                pareto, _, _, _, _, _, _ = self.compute_pareto_front(
-                    mean_pred_norm, std_pred_norm)
-                return pareto, selected_indices
-            else:
-                return selected_indices
-        
+            selected_indices = self._reif_function(
+                mean_prediction,
+                std_prediction,
+                n_samples,
+                skip_indices,
+            )
+
+        # REIF2-based selection
         elif self.strategy == "reif2":
-            selected_indices = self._reif2_function(mean_prediction, std_prediction, input_candidates, n_samples, skip_indices)
-            if self.pareto_metrics:
-                mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
-                std_pred_norm = normalize_tensor(std_prediction)
-                pareto, _, _, _, _, _, _ = self.compute_pareto_front(
-                    mean_pred_norm, std_pred_norm)
-                return pareto, selected_indices
-            else:
-                return selected_indices
-            
+            selected_indices = self._reif2_function(
+                mean_prediction,
+                std_prediction,
+                input_candidates,
+                n_samples,
+                skip_indices,
+            )
+
         else:
             raise ValueError(f"Unknown acquisition strategy '{self.strategy}'")
+
+        # ---------- Common Pareto-metrics ----------
+        if self.pareto_metrics:
+            mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
+            std_pred_norm  = normalize_tensor(std_prediction)
+            pareto, *_ = self.compute_pareto_front(mean_pred_norm, std_pred_norm)
+            return pareto, selected_indices
+        else:
+            return selected_indices
 
     def _u_function(
         self,
