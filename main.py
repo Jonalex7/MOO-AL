@@ -16,6 +16,29 @@ from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import AcquisitionStrategy
 from utils.data import isoprobabilistic_transform, custom_optimizer, normalize_tensor, parallel_predict
 
+def make_base_kernel(input_dim):
+    length_init = np.full(input_dim, 1.0, dtype=np.float64)
+    kernel = ConstantKernel(1.0, (1e-5, 1e5)) * Matern(
+        length_scale=length_init,
+        length_scale_bounds=(1e-5, 1e5),
+        nu=2.5,
+    )
+    return kernel
+
+def is_bad_fit(current_lml, prev_lml, lml_drop_tol=50.0, abs_lml_low=-100.0):
+    """
+    Consider a fit 'bad' if:
+      - LML drops a lot compared to the previous good model, OR
+      - LML is absolutely very low.
+    """
+    too_low = current_lml < abs_lml_low
+    if prev_lml is None:
+        big_drop = False
+    else:
+        big_drop = current_lml < (prev_lml - lml_drop_tol)
+    return too_low or big_drop
+
+
 def main(config, name_exp):
     # getting args from config file
     casestudy = config['case_study'] # limit state to use
@@ -51,6 +74,7 @@ def main(config, name_exp):
     results_file = {}
     pf_evol = []
     pareto_metrics = []
+    lml_evol = []
 
     # experiment seed for reproducibility
     if seed_exp is None:
@@ -93,6 +117,10 @@ def main(config, name_exp):
             
     # Initialize the acquisition strategy
     strategy = AcquisitionStrategy(**args_al)
+    
+    # Before the AL loop
+    kernel_prev = None     # last good kernel
+    lml_prev = None        # LML of last good model
 
     start_time = time.time()
     print(f'Experiment settings: {config} \n')
@@ -102,15 +130,52 @@ def main(config, name_exp):
         
         print(f'Training samples: {len(x_train_norm)} |', end=" ")
 
+        # --- 1) Choose initialization kernel ---
+        if kernel_prev is None:
+            # first iteration: base kernel
+            init_kernel = make_base_kernel(lstate.input_dim)
+        else:
+            # warm-start from last good kernel
+            init_kernel = kernel_prev
+
         # Train the Gaussian Process model
-        length_init = np.full(lstate.input_dim, 1.0, dtype=np.float64)
-        # --- Define anisotropic Matérn kernel ('matern-5_2') ---
-        kernel = ConstantKernel(1.0, (1e-5, 1e5)) * \
-                Matern(length_scale=length_init,
-                        length_scale_bounds=(1e-5, 1e5),
-                        nu=2.5)
-        model_gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=9, normalize_y=True, optimizer=custom_optimizer)
+        model_gp = GaussianProcessRegressor(
+            kernel=init_kernel,
+            n_restarts_optimizer=0,      # refine around warm-start
+            normalize_y=True,
+            optimizer=custom_optimizer,
+        )
         model_gp.fit(x_train_norm, y_train)
+        lml = model_gp.log_marginal_likelihood_value_
+        
+        # print(f"log_marginal_likelihood = {model_gp.log_marginal_likelihood_value_:.2E}", end=" ")
+            # --- 3) Check if this fit is 'bad' ---
+        if is_bad_fit(lml, lml_prev, lml_drop_tol=50.0, abs_lml_low=-100.0):
+            # This fit looks suspicious -> try a fresh base kernel with restarts
+            base_kernel = make_base_kernel(lstate.input_dim)
+            model_gp_fresh = GaussianProcessRegressor(
+                kernel=base_kernel,
+                n_restarts_optimizer=9,   # full search from scratch
+                normalize_y=True,
+                optimizer=custom_optimizer,
+            )
+            model_gp_fresh.fit(x_train_norm, y_train)
+            lml_fresh = model_gp_fresh.log_marginal_likelihood_value_
+
+            # Decide which one to keep: warm-start vs fresh
+            if lml_fresh > lml:
+                model_gp = model_gp_fresh
+                lml = lml_fresh
+        # --- 4) Now model_gp is our accepted model for this iteration ---
+        # print(f"log_marginal_likelihood = {lml:.2E}", end=" ")
+
+        # --- 5) Update "last good" kernel and LML for next iteration ---
+        # If you still want to be picky, you can re-use is_bad_fit here,
+        # but usually if we've already done the fallback above, just accept:
+        kernel_prev = model_gp.kernel_
+        lml_prev = lml
+
+        # kernel = model_gp.kernel_  # update kernel for next iteration
 
         # Pf estimation with MCs
         x_mcs_pf = np.random.normal(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
@@ -118,6 +183,7 @@ def main(config, name_exp):
         Pf_model = (mean_pf < 0.0).double().mean().item()
         Pf_rel_diff = (Pf_model - Pf_ref) / Pf_ref
         pf_evol.append(Pf_model)
+        lml_evol.append(lml)
 
         # reliability index, B
         B_model = - norm.ppf(Pf_model)
@@ -193,6 +259,7 @@ def main(config, name_exp):
 
     # Saving final results
     results_file['Pf_model'] = pf_evol
+    results_file['lml'] = lml_evol
     results_file['Pareto_metrics'] = pareto_metrics
     results_file['training_samples'] = x_train_norm.tolist(), y_train.tolist()  # training samples
 
