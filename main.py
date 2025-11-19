@@ -208,7 +208,7 @@ def main(config, name_exp):
             if args_al['moo_method'] == 'reliability': 
                 args_sampling['pf_estimate'] = Pf_model # Current Pf estimate for reliability method
         
-        if al_strategy == 'reif2':
+        if al_strategy == 'reif2' or al_strategy == "portfolio":
             args_sampling['input_candidates'] = x_mc_pool
 
         # Compute the indices to select based on the active learning strategy
@@ -262,6 +262,10 @@ def main(config, name_exp):
     results_file['lml'] = lml_evol
     results_file['Pareto_metrics'] = pareto_metrics
     results_file['training_samples'] = x_train_norm.tolist(), y_train.tolist()  # training samples
+    
+    if al_strategy == "portfolio":
+        results_file['portfolio_history'] = strategy.portfolio_history
+
 
     with open(results_dir + 'output.json', 'w') as file_id:
                     json.dump(results_file, file_id, indent=4)
