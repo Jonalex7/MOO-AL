@@ -60,6 +60,7 @@ class AcquisitionStrategy:
 
             # tracking which arm selected each iteration
             self.portfolio_history: List[str] = []
+            self.rewards_history: List[str] = []
             # counts per arm
             self.portfolio_counts = {a: 0 for a in self._arms}
 
@@ -531,7 +532,6 @@ class AcquisitionStrategy:
         # 2) rewards r_i = -|mu(best_i)|
         mu_best = mu[torch.as_tensor(arm_best, dtype=torch.long)]
         rewards = -mu_best.abs().to(torch.float64)
-
         # 3) totals update with memory
         self._G = self._delta * self._G + rewards
 
@@ -546,7 +546,7 @@ class AcquisitionStrategy:
             m = float(logits.max())
             expv = torch.exp(logits - m)
             self._p = expv / expv.sum()
-
+        # print(self._p)
         # 5) sample one arm and return its proposed index
         arm_idx = int(np.random.choice(self._K, p=self._p.numpy()))
         chosen_idx = int(arm_best[arm_idx])
@@ -555,7 +555,7 @@ class AcquisitionStrategy:
         chosen_arm = self._arms[arm_idx]
         self.portfolio_history.append(chosen_arm)
         self.portfolio_counts[chosen_arm] += 1
-
+        self.rewards_history.append(self._G.tolist())
         return chosen_idx
 
     def get_moo_eps_weighted(self, pareto_front: torch.Tensor) -> int:
