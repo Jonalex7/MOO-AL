@@ -11,6 +11,7 @@ import yaml
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern, ConstantKernel
 from scipy.stats import norm
+import wandb
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import AcquisitionStrategy
@@ -40,6 +41,7 @@ def is_bad_fit(current_lml, prev_lml, lml_drop_tol=50.0, abs_lml_low=-100.0):
 
 
 def main(config, name_exp):
+    wandb_mode = "online" if config.get("wandb_online", False) else "offline"
     # getting args from config file
     casestudy = config['case_study'] # limit state to use
     al_strategy = config['al_strategy'] # active learning strategy
@@ -125,6 +127,11 @@ def main(config, name_exp):
     # Initialize the acquisition strategy
     strategy = AcquisitionStrategy(**args_al)
     
+    # log experiment with wandb
+    run_name = f'{name_exp}_{date_time_stamp}'
+    wandb.init(project="MOO_AL", name=run_name, config=config, 
+               mode=wandb_mode, settings=wandb.Settings(start_method="thread"))
+    
     # Before the AL loop
     kernel_prev = None     # last good kernel
     lml_prev = None        # LML of last good model
@@ -136,6 +143,7 @@ def main(config, name_exp):
     for it in range(iterations + 1):
         
         print(f'Training samples: {len(x_train_norm)} |', end=" ")
+        wandb.log({"train_size": len(x_train_norm)}, step=it)
 
         # --- 1) Choose initialization kernel ---
         if kernel_prev is None:
@@ -193,6 +201,7 @@ def main(config, name_exp):
         B_rel_diff = (B_model-B_ref)/B_ref
 
         print(f'Pf_model: {Pf_model:.3E}, Pf_rel_diff: {Pf_rel_diff:.2E}, B_rel_diff: {B_rel_diff.item():.2E}, LML = {lml:.2E}')
+        wandb.log({"Pf_model":Pf_model, "Pf_rel_diff": Pf_rel_diff, "B_rel_diff": B_rel_diff, "LML": lml}, step=it)
 
         # Making predictions of mean and std for mc population 
         x_mc_pool = np.random.normal(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
@@ -275,7 +284,7 @@ def main(config, name_exp):
 
     end_time = time.time()
     execution_time = end_time - start_time
-
+    wandb.finish()
     print(f"Active learning completed in: {(execution_time/60):.2f} mins")
 
 if __name__ == "__main__":
