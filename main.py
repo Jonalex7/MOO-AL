@@ -175,16 +175,10 @@ def main(config, name_exp):
             if lml_fresh > lml:
                 model_gp = model_gp_fresh
                 lml = lml_fresh
-        # --- 4) Now model_gp is our accepted model for this iteration ---
-        # print(f"log_marginal_likelihood = {lml:.2E}", end=" ")
 
-        # --- 5) Update "last good" kernel and LML for next iteration ---
-        # If you still want to be picky, you can re-use is_bad_fit here,
-        # but usually if we've already done the fallback above, just accept:
+        # Update "last good" kernel and LML for next iteration ---
         kernel_prev = model_gp.kernel_
         lml_prev = lml
-
-        # kernel = model_gp.kernel_  # update kernel for next iteration
 
         # Pf estimation with MCs
         x_mcs_pf = np.random.normal(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
@@ -197,10 +191,6 @@ def main(config, name_exp):
         # reliability index, B
         B_model = - norm.ppf(Pf_model)
         B_rel_diff = (B_model-B_ref)/B_ref
-
-        # check beta stability
-        # b_stab = np.abs(B_model - b_j) / B_model   # relative difference with previous beta
-        # b_j = B_model  # Update b_j for the next iteration
 
         print(f'Pf_model: {Pf_model:.3E}, Pf_rel_diff: {Pf_rel_diff:.2E}, B_rel_diff: {B_rel_diff.item():.2E}, LML = {lml:.2E}')
 
