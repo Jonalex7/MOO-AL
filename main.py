@@ -151,6 +151,7 @@ def main(config, name_exp):
             n_restarts_optimizer=0,      # refine around warm-start
             normalize_y=True,
             optimizer=custom_optimizer,
+            alpha=1e-8
         )
         model_gp.fit(x_train_norm, y_train)
         lml = model_gp.log_marginal_likelihood_value_
@@ -165,6 +166,7 @@ def main(config, name_exp):
                 n_restarts_optimizer=9,   # full search from scratch
                 normalize_y=True,
                 optimizer=custom_optimizer,
+                alpha=1e-8
             )
             model_gp_fresh.fit(x_train_norm, y_train)
             lml_fresh = model_gp_fresh.log_marginal_likelihood_value_
