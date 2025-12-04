@@ -466,14 +466,25 @@ class AcquisitionStrategy:
         normalized_mean = (mean_predictions - mean_min) / (mean_max - mean_min)
         normalized_std = (std_predictions - std_min) / (std_max - std_min)
         
-        # Calculate the scalar scores with the desired gamma mapping
-        scores = (1 - gamma) * normalized_mean + gamma * normalized_std
+        # ------------------------------------------------------------------
+        # Euclidean-compromise scalarization 
+        # ------------------------------------------------------------------
+        # Ideal point at (1, 1)
+        delta_mean = 1.0 - normalized_mean
+        delta_std = 1.0 - normalized_std
 
-        # Assign weights to samples
-        weights = scores / scores.sum()
-        arg_max = np.argmax(weights).item()
-        # mo_reliability = pareto_front[arg_max]
-        return arg_max
+        # gamma controls exploration vs exploitation:
+        #   gamma ↑ -> more exploration
+        #   gamma ↓ -> more exploitation
+        w_mean = 1.0 - gamma   # weight on mean term
+        w_std = gamma          # weight on std term
+
+        # Weighted squared distance to ideal point (no need sqrt for argmin)
+        dist_sq = w_mean * (delta_mean ** 2) + w_std * (delta_std ** 2)
+
+        arg_min = int(torch.argmin(dist_sq).item())
+        return arg_min
+
     
     def _eps_value(self) -> float:
         """Linear decay epsilon in [eps_start -> eps_end] over eps_T calls."""
