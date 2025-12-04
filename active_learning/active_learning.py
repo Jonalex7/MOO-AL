@@ -557,8 +557,7 @@ class AcquisitionStrategy:
             m = float(logits.max())
             expv = torch.exp(logits - m)
             self._p = expv / expv.sum()
-        # print(self._p)
-        # 5) sample one arm and return its proposed index
+        # sample one arm and return its proposed index
         arm_idx = int(np.random.choice(self._K, p=self._p.numpy()))
         chosen_idx = int(arm_best[arm_idx])
 
@@ -583,8 +582,8 @@ class AcquisitionStrategy:
             return 0
 
         # Columns assumed "higher is better":
-        # pareto_front[:, 0] -> exploitation-oriented score (e.g., -|mean| normalized upstream)
-        # pareto_front[:, 1] -> exploration (e.g., std normalized upstream)
+        # pareto_front[:, 0] -> exploitation-oriented score 
+        # pareto_front[:, 1] -> exploration 
         pf = pareto_front
 
         # Per-column min-max normalize on the *current* front (robust to changing K / scale)
@@ -640,8 +639,8 @@ class AcquisitionStrategy:
         delta_sigma = 1.0 - pf_norm[:, 1]  
 
         # schedule
-        # We keep your semantics: eps ~ 1 => emphasize exploration (?),
-        # eps ~ 0 => emphasize exploitation (?).
+        # eps ~ 1 => emphasize exploration
+        # eps ~ 0 => emphasize exploitation
         eps = float(self._eps_value())
         w   = 1.0 - eps           # w in [0,1];
 
