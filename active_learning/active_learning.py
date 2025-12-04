@@ -28,8 +28,8 @@ class AcquisitionStrategy:
         self.pareto_metrics = pareto_metrics
 
         if self.strategy == "moo":
-            if moo_method not in ("knee", "compromise", "reliability", "eps_greedy"):
-                raise ValueError("`moo_method` must be 'knee', 'compromise', 'reliability', or 'eps_greedy'")
+            if moo_method not in ("knee", "compromise", "reliability", "eps_greedy", "eps_lw"):
+                raise ValueError("`moo_method` must be 'knee', 'compromise', 'reliability', 'eps_greedy' 'eps_lw")
             self.moo_method = moo_method
             # Initialize reliability parameters only when using moo_reliability
             if self.moo_method == "reliability":
@@ -39,7 +39,7 @@ class AcquisitionStrategy:
                 self.Pf_prev = 0.0
                 self.delta_Pf_buffer: List[float] = []
             # epsilon-greedy schedule state
-            if self.moo_method == "eps_greedy":
+            if self.moo_method == "eps_greedy" or self.moo_method == "eps_lw":
                 self.eps_start = float(eps_start)
                 self.eps_end   = float(eps_end)
                 self.eps_T     = int(eps_T)
@@ -336,6 +336,9 @@ class AcquisitionStrategy:
         elif method == 'eps_greedy':
             pos_on_front = self.get_moo_eps_greedy(pareto_front)
             return pareto_front, [pareto_front_indices[pos_on_front].item()]
+        elif method == 'eps_lw':
+            pos_on_front = self.get_moo_eps_euclidean(pareto_front)
+            return pareto_front, [pareto_front_indices[pos_on_front].item()]
         else:
             raise ValueError(f"Unknown MO pareto strategy: {method}")
 
@@ -388,6 +391,47 @@ class AcquisitionStrategy:
         pdf = norm.pdf(input_candidates)                 # (N, D)
         pdf_joint = pdf.prod(axis=1)              # independent product
         return torch.from_numpy(pdf_joint)
+
+    # def get_moo_reliability(self, pareto_front, pf_estimate):
+    #     # Checking Pf rel. difference to choose gamma behaviour
+    #     Pf_current = pf_estimate
+
+    #     # Calculate the relative difference from the previous Pf
+    #     if self.Pf_prev != 0:
+    #         delta_Pf = abs(Pf_current - self.Pf_prev) / self.Pf_prev
+    #     else:
+    #         delta_Pf = 1e2  # Handle division by zero
+
+    #     # Update the buffer with the latest delta_Pf
+    #     self.delta_Pf_buffer.append(delta_Pf)
+    #     if len(self.delta_Pf_buffer) > self.N_it:
+    #         self.delta_Pf_buffer.pop(0)  # Keep only the last N values
+
+    #     delta_avg = float(np.mean(self.delta_Pf_buffer))
+    #     # compute gamma and update Pf_prev
+    #     gamma = self.logistic_gamma(delta_avg, delta_P0=self.delta_P0, k=self.k_balance)
+    #     print(f'delta_pf_avg: {delta_avg:.3f}, gamma_log: {gamma:.3f} \n')
+    #     # Update previous Pf for next iteration
+    #     self.Pf_prev = Pf_current
+    #     # Extract mean predictions and standard deviations
+    #     mean_predictions = pareto_front[:, 0]
+    #     std_predictions = pareto_front[:, 1]
+        
+    #     # Normalize the objectives to [0, 1]
+    #     mean_min, mean_max = mean_predictions.min(), mean_predictions.max()
+    #     std_min, std_max = std_predictions.min(), std_predictions.max()
+        
+    #     normalized_mean = (mean_predictions - mean_min) / (mean_max - mean_min)
+    #     normalized_std = (std_predictions - std_min) / (std_max - std_min)
+        
+    #     # Calculate the scalar scores with the desired gamma mapping
+    #     scores = (1 - gamma) * normalized_mean + gamma * normalized_std
+
+    #     # Assign weights to samples
+    #     weights = scores / scores.sum()
+    #     arg_max = np.argmax(weights).item()
+    #     # mo_reliability = pareto_front[arg_max]
+    #     return arg_max
 
     def get_moo_reliability(self, pareto_front, pf_estimate):
         # Checking Pf rel. difference to choose gamma behaviour
@@ -513,3 +557,86 @@ class AcquisitionStrategy:
         self.portfolio_counts[chosen_arm] += 1
 
         return chosen_idx
+
+    def get_moo_eps_weighted(self, pareto_front: torch.Tensor) -> int:
+        """
+        Epsilon-greedy via linear scalarization on the current Pareto front.
+        gamma = eps in [0..1]: 1 -> exploration (std), 0 -> exploitation (|mean| proxy).
+        Returns the *index on the Pareto set* (map to full pool outside as usual).
+        """
+        K = pareto_front.size(0)
+        if K == 0:
+            raise ValueError("Empty Pareto front.")
+        if K == 1:
+            self._eps_t += 1
+            return 0
+
+        # Columns assumed "higher is better":
+        # pareto_front[:, 0] -> exploitation-oriented score (e.g., -|mean| normalized upstream)
+        # pareto_front[:, 1] -> exploration (e.g., std normalized upstream)
+        pf = pareto_front
+
+        # Per-column min-max normalize on the *current* front (robust to changing K / scale)
+        col_min, _ = torch.min(pf, dim=0)
+        col_max, _ = torch.max(pf, dim=0)
+        denom = torch.clamp(col_max - col_min, min=1e-12)
+        pf_norm = (pf - col_min) / denom  # shape (K, 2), in [0,1]
+
+        # Epsilon schedule -> gamma (weight on exploration)
+        gamma = float(self._eps_value())   # 1.0 -> explore-only; 0.0 -> exploit-only
+
+        # Linear scalarization and selection
+        # scores = (1 - gamma) * exploitation + gamma * exploration
+        scores = (1.0 - gamma) * pf_norm[:, 0] + gamma * pf_norm[:, 1]
+        idx_on_front = int(torch.argmax(scores).item())
+
+        self._eps_t += 1
+        return idx_on_front
+
+    def get_moo_eps_euclidean(self, pareto_front: torch.Tensor) -> int:
+        """
+        Epsilon-greedy via Euclidean-compromise scalarization on the current Pareto front.
+
+        We assume pareto_front[:, 0] and [:, 1] are 'higher is better' scores
+        (e.g. something like [-mean_norm, std_norm] upstream).
+
+        We:
+        1) Min-max normalize each objective on the current front to [0,1].
+        2) Define an ideal point at (1,1).
+        3) Compute weighted distance to the ideal point:
+            d^2 = w * ?f_mu^2 + (1 - w) * ?f_sigma^2
+            where ?f_mu = 1 - f_mu_norm, ?f_sigma = 1 - f_sigma_norm.
+        4) Select argmin d^2.
+        """
+
+        K = pareto_front.size(0)
+        if K == 0:
+            raise ValueError("Empty Pareto front.")
+        if K == 1:
+            self._eps_t += 1
+            return 0
+
+        pf = pareto_front
+
+        # 1) Per-column min-max normalization on the current Pareto front
+        col_min, _ = torch.min(pf, dim=0)
+        col_max, _ = torch.max(pf, dim=0)
+        denom = torch.clamp(col_max - col_min, min=1e-12)
+        pf_norm = (pf - col_min) / denom  # shape (K, 2), values in [0,1]
+
+        # 2) Distances to the ideal point (1,1)
+        delta_mu    = 1.0 - pf_norm[:, 0]   
+        delta_sigma = 1.0 - pf_norm[:, 1]  
+
+        # schedule
+        # We keep your semantics: eps ~ 1 => emphasize exploration (?),
+        # eps ~ 0 => emphasize exploitation (?).
+        eps = float(self._eps_value())
+        w   = 1.0 - eps           # w in [0,1];
+
+        # Weighted squared distance (no need to take sqrt: argmin is the same)
+        dist_sq = w * (delta_mu ** 2) + (1.0 - w) * (delta_sigma ** 2)
+
+        idx_on_front = int(torch.argmin(dist_sq).item())
+        self._eps_t += 1
+        return idx_on_front
