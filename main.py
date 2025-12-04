@@ -52,12 +52,12 @@ def main(config, name_exp):
     n_mcs_pf = config['n_mcs_pf']  # n_MonteCarlo pool of samples for pf estimation
     seed_exp = config['seed'] # seed for experiment
     save_interval = config['save_interval']  # interval to save model
+    config['name_exp'] = name_exp
 
     # Loading limit state and ref. Pf
     lstate = ls_REGISTRY[casestudy]()
     Pf_ref = lstate.target_pf
     B_ref = - norm.ppf(Pf_ref)
-    b_j = 0
 
     # results directory
     date_time_stamp = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
@@ -66,9 +66,9 @@ def main(config, name_exp):
     else:
         results_dir = f'results/{casestudy}/{al_strategy}_{al_batch}_{name_exp}_{date_time_stamp}/'
 
-    store_model_dir = results_dir + 'model/'
+    # store_model_dir = results_dir + 'model/'
 
-    for dir_path in [results_dir, store_model_dir]:
+    for dir_path in [results_dir]:
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
 
@@ -261,9 +261,9 @@ def main(config, name_exp):
             with open(results_dir + 'output.json', 'w') as file_id:
                         json.dump(results_file, file_id)
 
-            # Save the model (pickle)
-            with open(store_model_dir + 'gp_' + str(it) + '.pkl', 'wb') as file_id:
-                pickle.dump(model_gp, file_id)
+            # # Save the model (pickle)
+            # with open(store_model_dir + 'gp_' + str(it) + '.pkl', 'wb') as file_id:
+            #     pickle.dump(model_gp, file_id)
 
     # Saving final results
     results_file['Pf_model'] = pf_evol
@@ -278,9 +278,9 @@ def main(config, name_exp):
     with open(results_dir + 'output.json', 'w') as file_id:
                     json.dump(results_file, file_id, indent=4)
 
-    # Save the model (pickle)
-    with open(store_model_dir + 'gp_' + "last" + '.pkl', 'wb') as file_id:
-        pickle.dump(model_gp, file_id)
+    # # Save the model (pickle)
+    # with open(store_model_dir + 'gp_' + "last" + '.pkl', 'wb') as file_id:
+    #     pickle.dump(model_gp, file_id)
 
     end_time = time.time()
     execution_time = end_time - start_time
