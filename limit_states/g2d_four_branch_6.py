@@ -37,7 +37,7 @@ class g2D_four_branch_6():
     def eval_lstate(self, x):
         g, g1, g2, g3, g4 = float('nan'), float('nan'), float('nan'), float('nan'), float('nan')
         msg = 'Ok'
-        x = np.array(x, dtype='f')
+        x = np.array(x, dtype=np.float64)
 
         n_dim = len(x.shape)
         if n_dim == 1:
@@ -58,14 +58,14 @@ class g2D_four_branch_6():
 
         g_val_sys = g
         #g_val_comp = np.stack((g1, g2, g3, g4))
-        return torch.tensor(g_val_sys)
+        return torch.tensor(g_val_sys, dtype=torch.float64)
     
     def monte_carlo_estimate(self, n_samples):
         n_mcs = int(n_samples)
         x_mc_norm = np.random.normal(0, 1, size=(n_mcs, self.input_dim))
         x_mc_physical = isoprobabilistic_transform(x_mc_norm, self.standard_marginals, self.physical_marginals)
         y_mc = self.eval_lstate(x_mc_physical)
-        Pf_ref = torch.sum(y_mc < 0) / n_mcs
+        Pf_ref = (y_mc < 0).double().mean()
         B_ref = - norm.ppf(Pf_ref)
         return Pf_ref.item(), B_ref, x_mc_physical, y_mc
     

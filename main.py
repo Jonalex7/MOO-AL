@@ -93,6 +93,9 @@ def main(config, name_exp):
     
     # Design of experiments
     x_train_norm, _ , y_train = lstate.get_doe(n_samples=passive_samples, method='lhs', random_state=random_state)
+    # Ensure x_train_norm and y_train are 64-bit
+    x_train_norm = x_train_norm.double() 
+    y_train = y_train.double()
 
     iterations = int((total_samples-passive_samples)/al_batch) + 1 # number of iterations
 

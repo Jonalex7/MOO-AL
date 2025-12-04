@@ -16,25 +16,30 @@ class g2D_hat_function():
         '''mean(or min), std(or max), marginal_distrib'''
 
     def eval_lstate(self, x):
-        g1 = float('nan')
-        msg = 'Ok'
-        x = np.array(x, dtype='f')
+            g1 = float('nan')
+            msg = 'Ok'
+            # x = np.array(x, dtype='f') # <--- REMOVE OR CHANGE THIS LINE
 
-        n_dim = len(x.shape)
-        if n_dim == 1:
-            x = np.array(x)[np.newaxis]
-        elif n_dim > 2:
-            msg = 'Only available for 1D and 2D arrays.'
-            return float('nan'), float('nan'), msg
+            # Ensure x is a NumPy array, it will default to float64 if not specified
+            x = np.array(x) 
 
-        nrv_p = x.shape[1]
-        if nrv_p != self.input_dim:
-            msg = f'The number of random variables (x, columns) is expected to be {self.input_dim} but {nrv_p} is provided!'
-        else:
-            g1 = 20 - (x[:, 0] - x[:, 1])**2 - 8*(x[:, 0] + x[:, 1] - 4)**3
+            n_dim = len(x.shape)
+            if n_dim == 1:
+                x = np.array(x)[np.newaxis]
+            elif n_dim > 2:
+                msg = 'Only available for 1D and 2D arrays.'
+                return float('nan'), float('nan'), msg
 
-        g_val_sys = g1
-        return torch.tensor(g_val_sys)
+            nrv_p = x.shape[1]
+            if nrv_p != self.input_dim:
+                msg = f'The number of random variables (x, columns) is expected to be {self.input_dim} but {nrv_p} is provided!'
+            else:
+                # The calculation is done in NumPy's default float (usually float64)
+                g1 = 20 - (x[:, 0] - x[:, 1])**2 - 8*(x[:, 0] + x[:, 1] - 4)**3
+
+            g_val_sys = g1
+            # 
+            return torch.tensor(g_val_sys, dtype=torch.float64)
     
     def monte_carlo_estimate(self, n_samples):
         n_mcs = int(n_samples)
@@ -44,7 +49,7 @@ class g2D_hat_function():
         Pf_ref = torch.sum(y_mc < 0) / n_mcs
         B_ref = - norm.ppf(Pf_ref)
         return Pf_ref.item(), B_ref, x_mc_physical, y_mc
-    
+
     def get_doe(self, n_samples=10, method='lhs', random_state=None):
         if random_state is None:
             random_state = np.random.RandomState()  # Default if no random state is passed
@@ -59,4 +64,4 @@ class g2D_hat_function():
         x_doe_norm = isoprobabilistic_transform(x_uniform, uniform_marginals, self.standard_marginals)
         y_scaled = self.eval_lstate(x_doe_physical)
 
-        return x_doe_norm, x_doe_physical, y_scaled
+        return x_doe_norm, x_doe_physical, y_scaled  

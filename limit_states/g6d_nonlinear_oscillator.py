@@ -24,12 +24,16 @@ class g6d_nonlinear_oscillator():
         '''mean(or min), std(or max), marginal_distrib'''
 
     def eval_lstate(self, x):
-        x = np.array(x, dtype='f')
+        # x = np.array(x, dtype='f') # <-- REMOVE or change to 'd' (float64)
+        # Remove dtype='f'. Use default np.array(x) which is typically float64.
+        x = np.array(x) 
         
         n_dim = len(x.shape)
         if n_dim == 1:
             x = np.array(x)[np.newaxis]
         
+        # ... (rest of the variable assignments) ...
+
         m = x[:, 0]
         c1 = x[:, 1]
         c2 = x[:, 2]
@@ -37,10 +41,12 @@ class g6d_nonlinear_oscillator():
         f1 = x[:, 4]
         t1 = x[:, 5]
 
+        # The subsequent calculations use the precision of the input array x.
         w0 = np.sqrt((c1+c2)/m)
         g = 3*r - np.abs(((2*f1)/(m*w0**2)) * np.sin((t1 * w0)/2))
 
-        return torch.tensor(g)    
+        # Explicitly set dtype=torch.float64
+        return torch.tensor(g, dtype=torch.float64)
 
     def monte_carlo_estimate(self, n_samples):
         n_mcs = int(n_samples)
@@ -57,24 +63,16 @@ class g6d_nonlinear_oscillator():
             random_state = np.random.RandomState()
 
         if method == 'lhs':
-            # Generates samples that are uniformly distributed within the unit hypercube [0,1]^d
+            # ... (lines to generate x_uniform) ...
             uniform_marginals = {f'x{var+1}': [0, 1.0, 'uniform'] for var in range(self.input_dim )}
             sampler = qmc.LatinHypercube(d=self.input_dim, seed=random_state)
-            x_uniform = sampler.random(n=int(n_samples))
+            x_uniform = sampler.random(n=int(n_samples)) # Returns numpy.float64 by default
 
-            # Converting samples from uniform to physical and standard space
+            # x_doe_physical and x_doe_norm are NumPy arrays from isoprobabilistic_transform
             x_doe_physical = isoprobabilistic_transform(x_uniform, uniform_marginals, self.physical_marginals)
             x_doe_norm = isoprobabilistic_transform(x_uniform, uniform_marginals, self.standard_marginals)
+            
+            # y_scaled is a torch.float64 tensor from the fixed eval_lstate
             y_scaled = self.eval_lstate(x_doe_physical)
-               
-        #Sobol DoE
-        '''if method == 'sobol':
-            sampler = qmc.Sobol(d=self.input_dim, scramble=True)    #d=dimensionality
-            sample = sampler.random_base2(m=exp_sobol)   #change m=exponent to increase the sample size
-            l_bounds = [-2.0, -2.0]  #design domain for each variable in the physical space
-            u_bounds = [2.0, 2.0]
-            X_active = qmc.scale(sample, l_bounds, u_bounds)
-            Y_active = self.eval_lstate(X_active)
-            return X_active, Y_active'''
 
         return x_doe_norm, x_doe_physical, y_scaled

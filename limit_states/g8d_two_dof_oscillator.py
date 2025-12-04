@@ -69,7 +69,7 @@ class g8d_two_dof_oscillator:
             Columns: [m_p, m_s, k_p, k_s, ζ_p, ζ_s, F_s, S_0]
         Returns: torch.Tensor of shape (n_samples,)
         """
-        x = np.array(x, dtype=float)
+        x = np.array(x, dtype=np.float64)
         if x.ndim == 1:
             x = x[np.newaxis, :]
 
@@ -108,7 +108,7 @@ class g8d_two_dof_oscillator:
         # G = F_s - 3 k_s * std_resp
         g = Fs - 3.0 * ks * std_resp
 
-        return torch.as_tensor(g, dtype=torch.float32)
+        return torch.as_tensor(g, dtype=torch.float64)
 
     def monte_carlo_estimate(self, n_samples):
         """
@@ -124,7 +124,7 @@ class g8d_two_dof_oscillator:
             x_mc_norm, self.standard_marginals, self.physical_marginals
         )
         y_mc = self.eval_lstate(x_mc_physical)
-        Pf_ref = (y_mc < 0.0).float().mean()
+        Pf_ref = (y_mc < 0.0).double().mean()
         beta_ref = -norm.ppf(Pf_ref)
 
         return Pf_ref.item(), beta_ref, x_mc_physical, y_mc

@@ -7,12 +7,13 @@ from joblib import Parallel, delayed
 
 def isoprobabilistic_transform(x, source_marginals, target_marginals):
     if not isinstance(x, torch.Tensor):
-        x = torch.tensor(x, dtype=torch.float32)
+        x = torch.tensor(x, dtype=torch.float64)
 
     if len(x.shape) == 1:
         x = x.unsqueeze(0)
         
-    transformed_x = torch.empty_like(x)
+    # The output tensor should also be float64
+    transformed_x = torch.empty_like(x, dtype=torch.float64) 
     
     for i, (source_params, target_params) in enumerate(zip(source_marginals.values(), target_marginals.values())):
         loc_source, scale_source, dist_source = source_params
@@ -23,7 +24,7 @@ def isoprobabilistic_transform(x, source_marginals, target_marginals):
             # Compute mu and sigma for source lognormal distribution
             mu_source = np.log(loc_source**2 / np.sqrt(loc_source**2 + scale_source**2))
             sigma_source = np.sqrt(np.log(1 + (scale_source / loc_source)**2))
-            dist_source = stats.lognorm(s=sigma_source, scale=np.exp(mu_source))  # lognorm takes sigma and exp(mu)
+            dist_source = stats.lognorm(s=sigma_source, scale=np.exp(mu_source))
         elif dist_source == 'uniform':
             dist_source = stats.uniform(loc=loc_source, scale=scale_source)
         else:
@@ -37,15 +38,16 @@ def isoprobabilistic_transform(x, source_marginals, target_marginals):
             dist_target = stats.lognorm(s=sigma_target, scale=np.exp(mu_target))
         elif dist_target == 'uniform':
             # Correct the scale for the uniform distribution
-            dist_target = stats.uniform(loc=loc_target, scale=scale_target - loc_target)  # scale is upper bound - lower bound
+            dist_target = stats.uniform(loc=loc_target, scale=scale_target - loc_target)
         else:
             dist_target = getattr(stats, dist_target)(loc=loc_target, scale=scale_target)
 
-        # Calculate the CDF of source samples
-        cdf_source = dist_source.cdf(x[:, i])
+        # Calculate the CDF of source samples (x[:, i] will be float64)
+        cdf_source = dist_source.cdf(x[:, i].numpy()) # Must convert back to numpy for scipy.stats
         
         # Use the inverse CDF (PPF) of the target distribution to get transformed samples
-        transformed_x[:, i] = torch.tensor(dist_target.ppf(cdf_source), dtype=torch.float32)
+        # Change to float64 for the final tensor conversion
+        transformed_x[:, i] = torch.tensor(dist_target.ppf(cdf_source), dtype=torch.float64)
     
     if x.shape[0] == 1:
         return transformed_x.squeeze()
@@ -60,9 +62,8 @@ def custom_optimizer(obj_func, initial_theta, bounds):
 def predict_batch(model, x_batch):
     return model.predict(x_batch, return_std=True)
 
-# Splitting x_mc_pool into smaller chunks
 def parallel_predict(model_gp, x_mc_pool, n_jobs=-1):
-    batch_size = 10000  # Adjust batch size based on your system memory to avoid overflow
+    batch_size = 10000 
     n_batches = int(np.ceil(x_mc_pool.shape[0] / batch_size))
     
     # Split into batches
@@ -73,10 +74,11 @@ def parallel_predict(model_gp, x_mc_pool, n_jobs=-1):
 
     # Combining results
     means, stds = zip(*results)
-    mean_prediction = np.concatenate(means, axis=0)
-    std_prediction = np.concatenate(stds, axis=0)
+    mean_prediction = np.concatenate(means, axis=0) # NumPy array (float64)
+    std_prediction = np.concatenate(stds, axis=0) # NumPy array (float64)
 
-    return torch.tensor(mean_prediction), torch.tensor(std_prediction)
+    # 
+    return torch.tensor(mean_prediction, dtype=torch.float64), torch.tensor(std_prediction, dtype=torch.float64)
 
 def normalize_tensor(tensor):
     min_vals = tensor.min(dim=0, keepdim=True).values

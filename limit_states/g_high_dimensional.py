@@ -22,7 +22,7 @@ class gd_high_dimensional():
         '''mean(or min), std(or max), marginal_distrib'''
 
     def eval_lstate(self, x):
-        x = np.array(x, dtype='f')
+        x = np.array(x, dtype=np.float64)
         
         n_dim = len(x.shape)
         if n_dim == 1:
@@ -35,7 +35,7 @@ class gd_high_dimensional():
         term_2 = np.sum(x, axis=1)
         g = term_1 - term_2
 
-        return torch.tensor(g)    
+        return torch.tensor(g, dtype=torch.float64)  
 
     def monte_carlo_estimate(self, n_samples):
         n_mcs = int(n_samples)
@@ -43,7 +43,7 @@ class gd_high_dimensional():
 
         x_mc_physical = isoprobabilistic_transform(x_mc_norm, self.standard_marginals, self.physical_marginals)
         y_mc = self.eval_lstate(x_mc_physical)
-        Pf_ref = torch.sum(y_mc < 0) / n_mcs
+        Pf_ref = (y_mc < 0).double().mean()
         B_ref = - norm.ppf(Pf_ref)
         return Pf_ref.item(), B_ref, x_mc_physical, y_mc
 
@@ -61,15 +61,5 @@ class gd_high_dimensional():
             x_doe_physical = isoprobabilistic_transform(x_uniform, uniform_marginals, self.physical_marginals)
             x_doe_norm = isoprobabilistic_transform(x_uniform, uniform_marginals, self.standard_marginals)
             y_scaled = self.eval_lstate(x_doe_physical)
-               
-        #Sobol DoE
-        '''if method == 'sobol':
-            sampler = qmc.Sobol(d=self.input_dim, scramble=True)    #d=dimensionality
-            sample = sampler.random_base2(m=exp_sobol)   #change m=exponent to increase the sample size
-            l_bounds = [-2.0, -2.0]  #design domain for each variable in the physical space
-            u_bounds = [2.0, 2.0]
-            X_active = qmc.scale(sample, l_bounds, u_bounds)
-            Y_active = self.eval_lstate(X_active)
-            return X_active, Y_active'''
 
         return x_doe_norm, x_doe_physical, y_scaled
