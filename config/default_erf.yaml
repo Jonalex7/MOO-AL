@@ -11,5 +11,8 @@ seed: null # null for random seed (default)
 n_mcs_pf: 10000000 # size of MonteCarlo sampling for pf estimation
 
 #--- output model----
-save_interval: 50 # Save model every n iterations
+save_interval: 10 # Save model every n iterations
 pareto_metrics: True # If True, compute pareto metrics
+
+# wandb logging
+wandb_online: False
