@@ -17,6 +17,7 @@ class AcquisitionStrategy:
         N_it: int = 2, # Number of iterations to consider for moving average in reliability method
         delta_P0: float = 0.2, # (0,1) threshold of relative difference at which gamma=0.5
         k_balance: float = 40,  # Positive constant controlling how quickly gamma transition from 0 to 1
+        gamma_max: float = 1.0,
         pareto_metrics: bool = False, # If True, returns Pareto front and selected indices
         eps_start: float = 1.0,     # start fully exploratory
         eps_end: float = 0.0,       # end fully exploitative
@@ -36,6 +37,7 @@ class AcquisitionStrategy:
                 self.N_it = N_it
                 self.delta_P0 = delta_P0
                 self.k_balance = k_balance
+                self.gamma_max = gamma_max
                 self.Pf_prev = 0.0
                 self.delta_Pf_buffer: List[float] = []
             # epsilon-greedy schedule state
@@ -408,8 +410,7 @@ class AcquisitionStrategy:
         return pareto_front[idx], idx, ideal
     
     def logistic_gamma(self, delta_P, delta_P0=0.2, k=40):
-        gamma_max = 1.0
-        gamma = gamma_max*(1 / (1 + np.exp(-k * (delta_P - delta_P0))))
+        gamma = self.gamma_max*(1 / (1 + np.exp(-k * (delta_P - delta_P0))))
         return gamma
     
     def std_normal_pdf_product(self, input_candidates: np.ndarray) -> torch.Tensor:

@@ -12,6 +12,7 @@ seed: null # null for random seed (default)
 N_it: 2 # Number of iterations to consider for moving average
 delta_p0: 0.2 # threshold of relative difference at which gamma=0.5
 k_balance: 40 # Positive constant controlling how quickly gamma transition from 0 to 1
+gamma_max: 0.9
 
 # --- reliability estimation---
 n_mcs_pf: 10000000 # size of MonteCarlo sampling for pf estimation
