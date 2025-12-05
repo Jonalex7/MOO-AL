@@ -218,7 +218,8 @@ def main(config, name_exp):
                 args_sampling['pf_estimate'] = Pf_model # Current Pf estimate for reliability method
         
         if al_strategy == 'reif2' or al_strategy == "portfolio":
-            args_sampling['input_candidates'] = x_mc_pool
+            x_mc_pool_physical = isoprobabilistic_transform(x_mc_pool, lstate.standard_marginals, lstate.physical_marginals)
+            args_sampling['input_candidates'] = x_mc_pool_physical
 
         # Compute the indices to select based on the active learning strategy
         if args_al['pareto_metrics']:
