@@ -49,7 +49,6 @@ OUTPUT_NUMBER=$((repeat_num + 1))
 
 echo "Running with --case_study=$CASE_STUDY --al_strategy=$AL_STRATEGY --output=$OUTPUT_NUMBER"
 # Run the Python script with the selected arguments
-python main.py --case_study "$CASE_STUDY" --al_strategy "$AL_STRATEGY" --output "$OUTPUT_NUMBER"
 
 # OUTPUT_NAME="${OUTPUT_PREFIX}_${OUTPUT_NUMBER}"
 python main.py --config default_moor --case_study "$CASE_STUDY" --al_strategy "$AL_STRATEGY" --output "$OUTPUT_NUMBER"
