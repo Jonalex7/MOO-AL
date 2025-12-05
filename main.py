@@ -11,6 +11,7 @@ import yaml
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern, ConstantKernel
 from scipy.stats import norm
+import wandb
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import AcquisitionStrategy
@@ -40,6 +41,7 @@ def is_bad_fit(current_lml, prev_lml, lml_drop_tol=50.0, abs_lml_low=-100.0):
 
 
 def main(config, name_exp):
+    wandb_mode = "online" if config.get("wandb_online", False) else "offline"
     # getting args from config file
     casestudy = config['case_study'] # limit state to use
     al_strategy = config['al_strategy'] # active learning strategy
@@ -50,12 +52,12 @@ def main(config, name_exp):
     n_mcs_pf = config['n_mcs_pf']  # n_MonteCarlo pool of samples for pf estimation
     seed_exp = config['seed'] # seed for experiment
     save_interval = config['save_interval']  # interval to save model
+    config['name_exp'] = name_exp
 
     # Loading limit state and ref. Pf
     lstate = ls_REGISTRY[casestudy]()
     Pf_ref = lstate.target_pf
     B_ref = - norm.ppf(Pf_ref)
-    b_j = 0
 
     # results directory
     date_time_stamp = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
@@ -64,9 +66,9 @@ def main(config, name_exp):
     else:
         results_dir = f'results/{casestudy}/{al_strategy}_{al_batch}_{name_exp}_{date_time_stamp}/'
 
-    store_model_dir = results_dir + 'model/'
+    # store_model_dir = results_dir + 'model/'
 
-    for dir_path in [results_dir, store_model_dir]:
+    for dir_path in [results_dir]:
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
 
@@ -125,6 +127,11 @@ def main(config, name_exp):
     # Initialize the acquisition strategy
     strategy = AcquisitionStrategy(**args_al)
     
+    # log experiment with wandb
+    run_name = f'{name_exp}_{date_time_stamp}'
+    wandb.init(project="MOO_AL", name=run_name, config=config, 
+               mode=wandb_mode, settings=wandb.Settings(start_method="thread"))
+    
     # Before the AL loop
     kernel_prev = None     # last good kernel
     lml_prev = None        # LML of last good model
@@ -136,6 +143,7 @@ def main(config, name_exp):
     for it in range(iterations + 1):
         
         print(f'Training samples: {len(x_train_norm)} |', end=" ")
+        wandb.log({"train_size": len(x_train_norm)}, step=it)
 
         # --- 1) Choose initialization kernel ---
         if kernel_prev is None:
@@ -193,6 +201,7 @@ def main(config, name_exp):
         B_rel_diff = (B_model-B_ref)/B_ref
 
         print(f'Pf_model: {Pf_model:.3E}, Pf_rel_diff: {Pf_rel_diff:.2E}, B_rel_diff: {B_rel_diff.item():.2E}, LML = {lml:.2E}')
+        wandb.log({"Pf_model":Pf_model, "Pf_rel_diff": Pf_rel_diff, "B_rel_diff": B_rel_diff, "LML": lml}, step=it)
 
         # Making predictions of mean and std for mc population 
         x_mc_pool = np.random.normal(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
@@ -252,9 +261,9 @@ def main(config, name_exp):
             with open(results_dir + 'output.json', 'w') as file_id:
                         json.dump(results_file, file_id)
 
-            # Save the model (pickle)
-            with open(store_model_dir + 'gp_' + str(it) + '.pkl', 'wb') as file_id:
-                pickle.dump(model_gp, file_id)
+            # # Save the model (pickle)
+            # with open(store_model_dir + 'gp_' + str(it) + '.pkl', 'wb') as file_id:
+            #     pickle.dump(model_gp, file_id)
 
     # Saving final results
     results_file['Pf_model'] = pf_evol
@@ -269,13 +278,13 @@ def main(config, name_exp):
     with open(results_dir + 'output.json', 'w') as file_id:
                     json.dump(results_file, file_id, indent=4)
 
-    # Save the model (pickle)
-    with open(store_model_dir + 'gp_' + "last" + '.pkl', 'wb') as file_id:
-        pickle.dump(model_gp, file_id)
+    # # Save the model (pickle)
+    # with open(store_model_dir + 'gp_' + "last" + '.pkl', 'wb') as file_id:
+    #     pickle.dump(model_gp, file_id)
 
     end_time = time.time()
     execution_time = end_time - start_time
-
+    wandb.finish()
     print(f"Active learning completed in: {(execution_time/60):.2f} mins")
 
 if __name__ == "__main__":

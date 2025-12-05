@@ -4,7 +4,7 @@ al_strategy: 'moo'    #eff, u, moo, erf, reif
 moo_method: 'eps_greedy' #knee, compromise, reliability, eps_greedy
 eps_start: 1.0     # if ==1.0; start fully exploratory
 eps_end: 0.0       # if ==0.0; end fully exploitative
-eps_T: 100             # number of iterations to decay over
+eps_T: 50             # number of iterations to decay over
 al_batch: 1   # batch sample size per active iteration
 total_samples: 200   # max number of acquired samples
 passive_samples: 10     # initial DoE with LHS
@@ -17,3 +17,6 @@ n_mcs_pf: 10000000 # size of MonteCarlo sampling for pf estimation
 #--- output model----
 save_interval: 50
 pareto_metrics: True # Save Pareto metrics for each iteration
+
+# wandb logging
+wandb_online: False
