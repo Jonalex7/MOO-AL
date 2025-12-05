@@ -355,14 +355,38 @@ class AcquisitionStrategy:
             if is_pareto[i]:
                 dominated = torch.all(objectives <= pt, dim=1) & torch.any(objectives < pt, dim=1)
                 is_pareto[dominated] = False
-        indices = torch.nonzero(is_pareto, as_tuple=False).squeeze()
+        indices = torch.nonzero(is_pareto, as_tuple=False).flatten()
+        # -----------------------------------
         front = objectives[is_pareto]
+        # This handles the case where front[:,0].argsort() returns tensor([0]) 
+        if indices.dim() == 0 or indices.size(0) == 1:
+            # If indices is a scalar, convert it to a 1D tensor before proceeding
+            if indices.dim() == 0:
+                indices = indices.unsqueeze(0)
+            
+            # Since the front has only one point, it is the knee and compromised point
+            front = objectives[is_pareto]
+            order = front[:,0].argsort()
+            
+            # Since indices is now guaranteed to be 1D, this line should work
+            indices = indices[order]
+            front = front[order]
+            
+            knee_pt = front[0].clone()
+            knee_idx = torch.tensor(0, device=indices.device)
+            comp_pt = front[0].clone()
+            comp_idx = torch.tensor(0, device=indices.device)
+            ideal_pt = front[0].clone() # Assuming ideal_pt is the point itself in this case
+            
+            return front, indices, knee_pt, indices[knee_idx], comp_pt, indices[comp_idx], ideal_pt
+        
         # Sort by first objective
         order = front[:,0].argsort()
         front = front[order]
         indices = indices[order]
         knee_pt, knee_idx = self.calculate_knee_point(front)
         comp_pt, comp_idx, ideal_pt = self.calculate_compromised_point(front)
+        
         return front, indices, knee_pt, indices[knee_idx], comp_pt, indices[comp_idx], ideal_pt
 
     def calculate_knee_point(self, pareto_front: Tensor):
