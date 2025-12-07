@@ -480,17 +480,10 @@ class AcquisitionStrategy:
         print(f'delta_pf_avg: {delta_avg:.3f}, gamma_log: {gamma:.3f} \n')
         # Update previous Pf for next iteration
         self.Pf_prev = Pf_current
-        # Extract mean predictions and standard deviations
-        mean_predictions = pareto_front[:, 0]
-        std_predictions = pareto_front[:, 1]
-        
-        # Normalize the objectives to [0, 1]
-        mean_min, mean_max = mean_predictions.min(), mean_predictions.max()
-        std_min, std_max = std_predictions.min(), std_predictions.max()
-        
-        normalized_mean = (mean_predictions - mean_min) / (mean_max - mean_min)
-        normalized_std = (std_predictions - std_min) / (std_max - std_min)
-        
+        # # Extract mean predictions and standard deviations
+        normalized_mean = pareto_front[:, 0]
+        normalized_std = pareto_front[:, 1]
+
         # ------------------------------------------------------------------
         # Euclidean-compromise scalarization 
         # ------------------------------------------------------------------
