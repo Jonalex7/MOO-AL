@@ -17,7 +17,7 @@ class AcquisitionStrategy:
         N_it: int = 2, # Number of iterations to consider for moving average in reliability method
         delta_P0: float = 0.2, # (0,1) threshold of relative difference at which gamma=0.5
         k_balance: float = 40,  # Positive constant controlling how quickly gamma transition from 0 to 1
-        gamma_max: float = 1.0,
+        input_dim: int = 2,
         pareto_metrics: bool = False, # If True, returns Pareto front and selected indices
         eps_start: float = 1.0,     # start fully exploratory
         eps_end: float = 0.0,       # end fully exploitative
@@ -37,7 +37,7 @@ class AcquisitionStrategy:
                 self.N_it = N_it
                 self.delta_P0 = delta_P0
                 self.k_balance = k_balance
-                self.gamma_max = gamma_max
+                self.input_dim = input_dim
                 self.Pf_prev = 0.0
                 self.delta_Pf_buffer: List[float] = []
             # epsilon-greedy schedule state
@@ -408,56 +408,34 @@ class AcquisitionStrategy:
         dists = torch.norm(pareto_front - ideal, dim=1)
         idx = torch.argmin(dists)
         return pareto_front[idx], idx, ideal
-    
+        
+    # def logistic_gamma(self, delta_P, delta_P0=0.2, k=40):
+    #     gamma = self.gamma_max*(1 / (1 + np.exp(-k * (delta_P - delta_P0))))
+    #     return gamma
+
     def logistic_gamma(self, delta_P, delta_P0=0.2, k=40):
-        gamma = self.gamma_max*(1 / (1 + np.exp(-k * (delta_P - delta_P0))))
+        # --- Dimension-aware cap ---
+        gamma_low  = 0.8    # cap in very high dimension
+        gamma_high = 1.0    # cap in low dimension
+        d_low      = 5      # ref low dimensionality
+        d_high     = 10     # ref high dimensionality
+        dim = self.input_dim
+        
+        if dim <= d_low:
+            gamma_cap = gamma_high
+        elif dim >= d_high:
+            gamma_cap = gamma_low
+        else:
+            alpha = (dim - d_low) / (d_high - d_low)  # in (0,1)
+            gamma_cap = gamma_high - alpha * (gamma_high - gamma_low)
+        # --- Logistic scaled by gamma_cap ---
+        gamma = gamma_cap / (1.0 + np.exp(-k * (delta_P - delta_P0)))
         return gamma
-    
+
     def std_normal_pdf_product(self, input_candidates: np.ndarray) -> torch.Tensor:
         pdf = norm.pdf(input_candidates)                 # (N, D)
         pdf_joint = pdf.prod(axis=1)              # independent product
         return torch.from_numpy(pdf_joint)
-
-    # def get_moo_reliability(self, pareto_front, pf_estimate):
-    #     # Checking Pf rel. difference to choose gamma behaviour
-    #     Pf_current = pf_estimate
-
-    #     # Calculate the relative difference from the previous Pf
-    #     if self.Pf_prev != 0:
-    #         delta_Pf = abs(Pf_current - self.Pf_prev) / self.Pf_prev
-    #     else:
-    #         delta_Pf = 1e2  # Handle division by zero
-
-    #     # Update the buffer with the latest delta_Pf
-    #     self.delta_Pf_buffer.append(delta_Pf)
-    #     if len(self.delta_Pf_buffer) > self.N_it:
-    #         self.delta_Pf_buffer.pop(0)  # Keep only the last N values
-
-    #     delta_avg = float(np.mean(self.delta_Pf_buffer))
-    #     # compute gamma and update Pf_prev
-    #     gamma = self.logistic_gamma(delta_avg, delta_P0=self.delta_P0, k=self.k_balance)
-    #     print(f'delta_pf_avg: {delta_avg:.3f}, gamma_log: {gamma:.3f} \n')
-    #     # Update previous Pf for next iteration
-    #     self.Pf_prev = Pf_current
-    #     # Extract mean predictions and standard deviations
-    #     mean_predictions = pareto_front[:, 0]
-    #     std_predictions = pareto_front[:, 1]
-        
-    #     # Normalize the objectives to [0, 1]
-    #     mean_min, mean_max = mean_predictions.min(), mean_predictions.max()
-    #     std_min, std_max = std_predictions.min(), std_predictions.max()
-        
-    #     normalized_mean = (mean_predictions - mean_min) / (mean_max - mean_min)
-    #     normalized_std = (std_predictions - std_min) / (std_max - std_min)
-        
-    #     # Calculate the scalar scores with the desired gamma mapping
-    #     scores = (1 - gamma) * normalized_mean + gamma * normalized_std
-
-    #     # Assign weights to samples
-    #     weights = scores / scores.sum()
-    #     arg_max = np.argmax(weights).item()
-    #     # mo_reliability = pareto_front[arg_max]
-    #     return arg_max
 
     def get_moo_reliability(self, pareto_front, pf_estimate):
         # Checking Pf rel. difference to choose gamma behaviour
@@ -475,14 +453,14 @@ class AcquisitionStrategy:
             self.delta_Pf_buffer.pop(0)  # Keep only the last N values
 
         delta_avg = float(np.mean(self.delta_Pf_buffer))
-        # compute gamma and update Pf_prev
+        # # Extract mean predictions and standard deviations
+        normalized_mean = pareto_front[:, 0]
+        normalized_std = pareto_front[:, 1]
+        
         gamma = self.logistic_gamma(delta_avg, delta_P0=self.delta_P0, k=self.k_balance)
         print(f'delta_pf_avg: {delta_avg:.3f}, gamma_log: {gamma:.3f} \n')
         # Update previous Pf for next iteration
         self.Pf_prev = Pf_current
-        # # Extract mean predictions and standard deviations
-        normalized_mean = pareto_front[:, 0]
-        normalized_std = pareto_front[:, 1]
 
         # ------------------------------------------------------------------
         # Euclidean-compromise scalarization 
@@ -492,8 +470,8 @@ class AcquisitionStrategy:
         delta_std = 1.0 - normalized_std
 
         # gamma controls exploration vs exploitation:
-        #   gamma ↑ -> more exploration
-        #   gamma ↓ -> more exploitation
+        #   gamma -> more exploration
+        #   gamma -> more exploitation
         w_mean = 1.0 - gamma   # weight on mean term
         w_std = gamma          # weight on std term
 
@@ -503,7 +481,6 @@ class AcquisitionStrategy:
         arg_min = int(torch.argmin(dist_sq).item())
         return arg_min
 
-    
     def _eps_value(self) -> float:
         """Linear decay epsilon in [eps_start -> eps_end] over eps_T calls."""
         if self.eps_T <= 0:
