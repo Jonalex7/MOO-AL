@@ -114,7 +114,7 @@ def main(config, name_exp):
             args_al['N_it'] = config['N_it']  # Number of iterations to consider for moving average
             args_al['delta_P0'] = config['delta_p0'] # (0,1) threshold of relative difference at which gamma=0.5
             args_al['k_balance'] = config['k_balance'] # Positive constant controlling how quickly gamma transition from 0 to 1
-            args_al['gamma_max'] = config['gamma_max'] # max exploration value (1-0) of 1 full exploration allowed
+            args_al['input_dim'] = lstate.input_dim
     
         if args_al['moo_method'] == "eps_greedy" or args_al['moo_method'] == "eps_lw":
             args_al['eps_start'] = config['eps_start']  # Initial epsilon value
