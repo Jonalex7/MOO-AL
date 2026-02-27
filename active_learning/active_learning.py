@@ -47,7 +47,7 @@ class AcquisitionStrategy:
                 self.eps_T     = int(eps_T)
                 self._eps_t    = 0  # internal call counter
 
-        # --- NEW: portfolio init ---
+        # Portfolio strategy initialization
         if self.strategy == "portfolio":
             # order of arms (must match the call sequence below)
             self._arms: List[str] = ["u", "eff", "erf", "reif", "reif2"]
@@ -79,14 +79,14 @@ class AcquisitionStrategy:
 
         # ---------- MOO-based selection  ----------
         if self.strategy == "moo":
-            pareto, selected_indices = self.get_moo(
+            pareto, selected_indices, p_min, p_max = self.get_moo(
                 mean_prediction,
                 std_prediction,
                 self.moo_method,
                 pf_estimate=pf_estimate
             )
             if self.pareto_metrics:
-                return pareto, selected_indices
+                return pareto, selected_indices, p_min, p_max
             else:
                 return selected_indices
 
@@ -158,8 +158,8 @@ class AcquisitionStrategy:
         if self.pareto_metrics:
             mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
             std_pred_norm  = normalize_tensor(std_prediction)
-            pareto, *_ = self.compute_pareto_front(mean_pred_norm, std_pred_norm)
-            return pareto, selected_indices
+            pareto, _, _, _, _, _, _, p_min, p_max = self.compute_pareto_front(mean_pred_norm, std_pred_norm)
+            return pareto, selected_indices, p_min, p_max
         else:
             return selected_indices
 
@@ -325,23 +325,23 @@ class AcquisitionStrategy:
         # Compute the Pareto front
         mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
         std_pred_norm = normalize_tensor(std_prediction)
-        pareto_front, pareto_front_indices, _, knee_idx, _, comp_idx, _ = self.compute_pareto_front(
+        pareto_front, pareto_front_indices, _, knee_idx, _, comp_idx, _, p_min, p_max = self.compute_pareto_front(
             mean_pred_norm, std_pred_norm
         )
         # select the knee point, compromised point, or reliability point
         if method == 'knee':
-            return pareto_front, [int(knee_idx)]
+            return pareto_front, [int(knee_idx)], p_min, p_max
         elif method == 'compromise':
-            return pareto_front, [int(comp_idx)]
+            return pareto_front, [int(comp_idx)], p_min, p_max
         elif method == 'reliability':
             moo_pareto_index = self.get_moo_reliability(pareto_front=pareto_front, pf_estimate=pf_estimate)
-            return pareto_front, [pareto_front_indices[moo_pareto_index].item()]
+            return pareto_front, [pareto_front_indices[moo_pareto_index].item()], p_min, p_max
         elif method == 'eps_greedy':
             pos_on_front = self.get_moo_eps_greedy(pareto_front)
-            return pareto_front, [pareto_front_indices[pos_on_front].item()]
+            return pareto_front, [pareto_front_indices[pos_on_front].item()], p_min, p_max
         elif method == 'eps_lw':
             pos_on_front = self.get_moo_eps_euclidean(pareto_front)
-            return pareto_front, [pareto_front_indices[pos_on_front].item()]
+            return pareto_front, [pareto_front_indices[pos_on_front].item()], p_min, p_max
         else:
             raise ValueError(f"Unknown MO pareto strategy: {method}")
 
@@ -382,6 +382,10 @@ class AcquisitionStrategy:
             
             return front, indices, knee_pt, indices[knee_idx], comp_pt, indices[comp_idx], ideal_pt
         
+        # Normalize the Pareto front to [0, 1]
+        pareto_min_vals = front.min(dim=0, keepdim=True).values # Minimum values for normalization
+        pareto_max_vals = front.max(dim=0, keepdim=True).values # Maximum values for normalization
+        front = (front - pareto_min_vals) / (pareto_max_vals - pareto_min_vals)
         # Sort by first objective
         order = front[:,0].argsort()
         front = front[order]
@@ -389,7 +393,7 @@ class AcquisitionStrategy:
         knee_pt, knee_idx = self.calculate_knee_point(front)
         comp_pt, comp_idx, ideal_pt = self.calculate_compromised_point(front)
         
-        return front, indices, knee_pt, indices[knee_idx], comp_pt, indices[comp_idx], ideal_pt
+        return front, indices, knee_pt, indices[knee_idx], comp_pt, indices[comp_idx], ideal_pt, pareto_min_vals, pareto_max_vals
 
     def calculate_knee_point(self, pareto_front: Tensor):
         p1, p2 = pareto_front[0], pareto_front[-1]
@@ -409,34 +413,69 @@ class AcquisitionStrategy:
         idx = torch.argmin(dists)
         return pareto_front[idx], idx, ideal
         
-    # def logistic_gamma(self, delta_P, delta_P0=0.2, k=40):
-    #     gamma = self.gamma_max*(1 / (1 + np.exp(-k * (delta_P - delta_P0))))
-    #     return gamma
-
     def logistic_gamma(self, delta_P, delta_P0=0.2, k=40):
-        # --- Dimension-aware cap ---
-        gamma_low  = 0.8    # cap in very high dimension
-        gamma_high = 1.0    # cap in low dimension
-        d_low      = 5      # ref low dimensionality
-        d_high     = 10     # ref high dimensionality
-        dim = self.input_dim
-        
-        if dim <= d_low:
-            gamma_cap = gamma_high
-        elif dim >= d_high:
-            gamma_cap = gamma_low
-        else:
-            alpha = (dim - d_low) / (d_high - d_low)  # in (0,1)
-            gamma_cap = gamma_high - alpha * (gamma_high - gamma_low)
-        # --- Logistic scaled by gamma_cap ---
-        gamma = gamma_cap / (1.0 + np.exp(-k * (delta_P - delta_P0)))
+        gamma_max = 0.9
+        gamma = gamma_max*(1 / (1 + np.exp(-k * (delta_P - delta_P0))))
         return gamma
+    
+    # def logistic_gamma(self, delta_P, delta_P0=0.2, k=40):
+    #     # --- Dimension-aware cap ---
+    #     gamma_low  = 0.8    # cap in very high dimension
+    #     gamma_high = 1.0    # cap in low dimension
+    #     d_low      = 5      # ref low dimensionality
+    #     d_high     = 10     # ref high dimensionality
+    #     dim = self.input_dim
+        
+    #     if dim <= d_low:
+    #         gamma_cap = gamma_high
+    #     elif dim >= d_high:
+    #         gamma_cap = gamma_low
+    #     else:
+    #         alpha = (dim - d_low) / (d_high - d_low)  # in (0,1)
+    #         gamma_cap = gamma_high - alpha * (gamma_high - gamma_low)
+    #     # --- Logistic scaled by gamma_cap ---
+    #     gamma = gamma_cap / (1.0 + np.exp(-k * (delta_P - delta_P0)))
+    #     return gamma
 
     def std_normal_pdf_product(self, input_candidates: np.ndarray) -> torch.Tensor:
         pdf = norm.pdf(input_candidates)                 # (N, D)
         pdf_joint = pdf.prod(axis=1)              # independent product
         return torch.from_numpy(pdf_joint)
 
+    # def get_moo_reliability(self, pareto_front, pf_estimate):
+    #     # Extract mean predictions and standard deviations
+    #     normalized_mean = pareto_front[:, 0]
+    #     normalized_std = pareto_front[:, 1]
+    #             # Checking Pf rel. difference to choose gamma behaviour
+    #     Pf_current = pf_estimate
+
+    #     # Calculate the relative difference from the previous Pf
+    #     if self.Pf_prev != 0:
+    #         delta_Pf = abs(Pf_current - self.Pf_prev) / self.Pf_prev
+    #     else:
+    #         delta_Pf = 1e2  # Handle division by zero
+
+    #     # Update the buffer with the latest delta_Pf
+    #     self.delta_Pf_buffer.append(delta_Pf)
+    #     if len(self.delta_Pf_buffer) > self.N_it:
+    #         self.delta_Pf_buffer.pop(0)  # Keep only the last N values
+
+    #     delta_avg = float(np.mean(self.delta_Pf_buffer))
+        
+    #     gamma = self.logistic_gamma(delta_avg, delta_P0=self.delta_P0, k=self.k_balance)
+    #     print(f'delta_pf_avg: {delta_avg:.3f}, gamma_log: {gamma:.3f} \n')
+    #     # Update previous Pf for next iteration
+    #     self.Pf_prev = Pf_current
+        
+    #     # Calculate the scalar scores with the desired gamma mapping
+    #     scores = (1 - gamma) * normalized_mean + gamma * normalized_std
+
+    #     # Assign weights to samples
+    #     weights = scores / scores.sum()
+    #     arg_max = np.argmax(weights).item()
+    #     # mo_reliability = pareto_front[arg_max]
+    #     return arg_max
+    
     def get_moo_reliability(self, pareto_front, pf_estimate):
         # Checking Pf rel. difference to choose gamma behaviour
         Pf_current = pf_estimate

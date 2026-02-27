@@ -165,8 +165,6 @@ def main(config, name_exp):
         model_gp.fit(x_train_norm, y_train)
         lml = model_gp.log_marginal_likelihood_value_
         
-        # print(f"log_marginal_likelihood = {model_gp.log_marginal_likelihood_value_:.2E}", end=" ")
-            # --- 3) Check if this fit is 'bad' ---
         if is_bad_fit(lml, lml_prev, lml_drop_tol=50.0, abs_lml_low=-100.0):
             # This fit looks suspicious -> try a fresh base kernel with restarts
             base_kernel = make_base_kernel(lstate.input_dim)
@@ -224,16 +222,19 @@ def main(config, name_exp):
         # Compute the indices to select based on the active learning strategy
         if args_al['pareto_metrics']:
             # If pareto metrics are enabled, we retrieve the pareto front and selected indices
-            pareto, selected_indices = strategy.get_indices(
+            pareto, selected_indices, pmin, pmax = strategy.get_indices(
             mean_prediction=mean_pred,
             std_prediction=std_pred,
             **args_sampling
             )
             mean_pred_norm = normalize_tensor(torch.abs(mean_pred))
             std_pred_norm = normalize_tensor(std_pred)
-            selected_objective_norm = torch.tensor([mean_pred_norm[selected_indices], std_pred_norm[selected_indices]])
+            selected_objective_norm = torch.tensor([-mean_pred_norm[selected_indices], std_pred_norm[selected_indices]])
             # Saving points for pareto metrics (full Pareto front, and selected sample)
-            pareto_metrics.append((pareto.tolist(), selected_objective_norm.tolist()))
+            denom = pmax - pmin
+            denom[denom == 0] = 1.0
+            selected_local_norm = (selected_objective_norm - pmin) / denom
+            pareto_metrics.append((pareto.tolist(), selected_local_norm.tolist()))
         else:
         # retrieve the selected indices without pareto metrics
             selected_indices = strategy.get_indices(
