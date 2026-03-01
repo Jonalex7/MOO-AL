@@ -1,58 +1,43 @@
-import torch
 import numpy as np
-from scipy.stats import norm, uniform, lognorm
 import scipy.stats as stats
 from scipy.optimize import fmin_l_bfgs_b
 from joblib import Parallel, delayed
 
 def isoprobabilistic_transform(x, source_marginals, target_marginals):
-    if not isinstance(x, torch.Tensor):
-        x = torch.tensor(x, dtype=torch.float64)
+    # Ensure x is a numpy array
+    x = np.atleast_2d(x).astype(np.float64)
+    transformed_x = np.empty_like(x)
 
-    if len(x.shape) == 1:
-        x = x.unsqueeze(0)
-        
-    # The output tensor should also be float64
-    transformed_x = torch.empty_like(x, dtype=torch.float64) 
-    
     for i, (source_params, target_params) in enumerate(zip(source_marginals.values(), target_marginals.values())):
-        loc_source, scale_source, dist_source = source_params
-        loc_target, scale_target, dist_target = target_params
-        
+        loc_s, scale_s, dist_s_name = source_params
+        loc_t, scale_t, dist_t_name = target_params
+
         # Define source distribution
-        if dist_source == 'lognorm':
-            # Compute mu and sigma for source lognormal distribution
-            mu_source = np.log(loc_source**2 / np.sqrt(loc_source**2 + scale_source**2))
-            sigma_source = np.sqrt(np.log(1 + (scale_source / loc_source)**2))
-            dist_source = stats.lognorm(s=sigma_source, scale=np.exp(mu_source))
-        elif dist_source == 'uniform':
-            dist_source = stats.uniform(loc=loc_source, scale=scale_source)
+        if dist_s_name == 'lognorm':
+            mu_s = np.log(loc_s**2 / np.sqrt(loc_s**2 + scale_s**2))
+            sigma_s = np.sqrt(np.log(1 + (scale_s / loc_s)**2))
+            dist_source = stats.lognorm(s=sigma_s, scale=np.exp(mu_s))
+        elif dist_s_name == 'uniform':
+            dist_source = stats.uniform(loc=loc_s, scale=scale_s)
         else:
-            dist_source = getattr(stats, dist_source)(loc=loc_source, scale=scale_source)
+            dist_source = getattr(stats, dist_s_name)(loc=loc_s, scale=scale_s)
 
         # Define target distribution
-        if dist_target == 'lognorm':
-            # Compute mu and sigma for target lognormal distribution
-            mu_target = np.log(loc_target**2 / np.sqrt(loc_target**2 + scale_target**2))
-            sigma_target = np.sqrt(np.log(1 + (scale_target / loc_target)**2))
-            dist_target = stats.lognorm(s=sigma_target, scale=np.exp(mu_target))
-        elif dist_target == 'uniform':
+        if dist_t_name == 'lognorm':
+            mu_t = np.log(loc_t**2 / np.sqrt(loc_t**2 + scale_t**2))
+            sigma_t = np.sqrt(np.log(1 + (scale_t / loc_t)**2))
+            dist_target = stats.lognorm(s=sigma_t, scale=np.exp(mu_t))
+        elif dist_t_name == 'uniform':
             # Correct the scale for the uniform distribution
-            dist_target = stats.uniform(loc=loc_target, scale=scale_target - loc_target)
+            dist_target = stats.uniform(loc=loc_t, scale=scale_t - loc_t)
         else:
-            dist_target = getattr(stats, dist_target)(loc=loc_target, scale=scale_target)
+            dist_target = getattr(stats, dist_t_name)(loc=loc_t, scale=scale_t)
 
-        # Calculate the CDF of source samples (x[:, i] will be float64)
-        cdf_source = dist_source.cdf(x[:, i].numpy()) # Must convert back to numpy for scipy.stats
-        
-        # Use the inverse CDF (PPF) of the target distribution to get transformed samples
-        # Change to float64 for the final tensor conversion
-        transformed_x[:, i] = torch.tensor(dist_target.ppf(cdf_source), dtype=torch.float64)
-    
-    if x.shape[0] == 1:
-        return transformed_x.squeeze()
-    else:
-        return transformed_x
+        # Compute transformation: Target_PPF(Source_CDF(x))
+        cdf_source = dist_source.cdf(x[:, i])
+        transformed_x[:, i] = dist_target.ppf(cdf_source)
+
+    return transformed_x.squeeze() if x.shape[0] == 1 else transformed_x
 
 def custom_optimizer(obj_func, initial_theta, bounds):
     opt_res = fmin_l_bfgs_b(obj_func, initial_theta, bounds=bounds, maxiter=1000)
@@ -63,24 +48,25 @@ def predict_batch(model, x_batch):
     return model.predict(x_batch, return_std=True)
 
 def parallel_predict(model_gp, x_mc_pool, n_jobs=-1):
-    batch_size = 10000 
+    batch_size = 10000
     n_batches = int(np.ceil(x_mc_pool.shape[0] / batch_size))
-    
+
     # Split into batches
     batches = [x_mc_pool[i * batch_size: (i + 1) * batch_size] for i in range(n_batches)]
-    
+
     # Parallel predictions using joblib
     results = Parallel(n_jobs=n_jobs)(delayed(predict_batch)(model_gp, batch) for batch in batches)
 
     # Combining results
     means, stds = zip(*results)
-    mean_prediction = np.concatenate(means, axis=0) # NumPy array (float64)
-    std_prediction = np.concatenate(stds, axis=0) # NumPy array (float64)
+    mean_prediction = np.concatenate(means, axis=0).astype(np.float64, copy=False)
+    std_prediction = np.concatenate(stds, axis=0).astype(np.float64, copy=False)
+    return mean_prediction, std_prediction
 
-    # 
-    return torch.tensor(mean_prediction, dtype=torch.float64), torch.tensor(std_prediction, dtype=torch.float64)
-
-def normalize_tensor(tensor):
-    min_vals = tensor.min(dim=0, keepdim=True).values
-    max_vals = tensor.max(dim=0, keepdim=True).values
-    return (tensor - min_vals) / (max_vals - min_vals)
+def normalize_array(arr):
+    arr = np.asarray(arr, dtype=np.float64)
+    min_vals = np.min(arr, axis=0, keepdims=True)
+    max_vals = np.max(arr, axis=0, keepdims=True)
+    denom = np.where(max_vals > min_vals, max_vals - min_vals, 1.0)
+    normalized = (arr - min_vals) / denom
+    return normalized.squeeze() if arr.ndim == 1 else normalized
