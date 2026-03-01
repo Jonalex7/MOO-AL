@@ -120,6 +120,15 @@ def main(config, name_exp):
     if al_strategy == "portfolio":
         args_al['portfolio_lambda'] = config['portfolio_lambda']  # Hedge balance (λ)
         args_al['portfolio_delta'] = config['portfolio_delta']    # Memory factor (δ)
+
+    if al_strategy == "eier":
+        if al_batch != 1:
+            raise ValueError("EIER strategy currently supports al_batch=1 only.")
+        args_al['batch_size_acq'] = config['batch_size_acq']
+        args_al['n_z_mc'] = config['n_z_mc']
+        args_al['jitter_stddev'] = config['obs_stddev']
+        args_al['local_mis_topk'] = config['local_mis_topk']
+        args_al['debug_acq'] = config.get('debug_acq', False)
         
     # Initialize the acquisition strategy
     strategy = AcquisitionStrategy(**args_al)
@@ -150,13 +159,19 @@ def main(config, name_exp):
             # warm-start from last good kernel
             init_kernel = kernel_prev
 
+        gp_alpha = 1e-8
+        if al_strategy == "eier":
+            y_scale = float(np.std(y_train))
+            y_scale = max(y_scale, 1e-12)
+            gp_alpha = float(config['obs_stddev'] / y_scale) ** 2
+
         # Train the Gaussian Process model
         model_gp = GaussianProcessRegressor(
             kernel=init_kernel,
             n_restarts_optimizer=0,      # refine around warm-start
             normalize_y=True,
             optimizer=custom_optimizer,
-            alpha=1e-8
+            alpha=gp_alpha
         )
         model_gp.fit(x_train_norm, y_train)
         lml = model_gp.log_marginal_likelihood_value_
@@ -169,7 +184,7 @@ def main(config, name_exp):
                 n_restarts_optimizer=9,   # full search from scratch
                 normalize_y=True,
                 optimizer=custom_optimizer,
-                alpha=1e-8
+                alpha=gp_alpha
             )
             model_gp_fresh.fit(x_train_norm, y_train)
             lml_fresh = model_gp_fresh.log_marginal_likelihood_value_
@@ -214,6 +229,11 @@ def main(config, name_exp):
         if al_strategy == 'reif2' or al_strategy == "portfolio":
             x_mc_pool_physical = isoprobabilistic_transform(x_mc_pool, lstate.standard_marginals, lstate.physical_marginals)
             args_sampling['input_candidates'] = x_mc_pool_physical
+
+        if al_strategy == "eier":
+            args_sampling['model_gp'] = model_gp
+            args_sampling['candidate_pool'] = x_mc_pool
+            args_sampling['z_seed'] = int(random_state.randint(0, 2**31 - 1))
 
         # Compute the indices to select based on the active learning strategy
         if args_al['pareto_metrics']:
