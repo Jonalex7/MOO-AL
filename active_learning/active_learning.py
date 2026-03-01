@@ -1,9 +1,10 @@
 from typing import List, Optional
-import torch
-from torch import Tensor
+
 import numpy as np
 from scipy.stats import norm
-from utils.data import normalize_tensor
+
+from utils.data import normalize_array
+
 
 class AcquisitionStrategy:
     """
@@ -22,8 +23,8 @@ class AcquisitionStrategy:
         eps_start: float = 1.0,     # start fully exploratory
         eps_end: float = 0.0,       # end fully exploitative
         eps_T: int = 100,             # number of calls to decay over
-        portfolio_lambda: float = 2.0,   # Hedge balance (λ)
-        portfolio_delta: float = 0.7,    # Memory factor (δ)
+        portfolio_lambda: float = 2.0,   # Hedge balance (lambda)
+        portfolio_delta: float = 0.7,    # Memory factor (delta)
     ):
         self.strategy = acquisition_strategy.lower().strip()
         self.pareto_metrics = pareto_metrics
@@ -54,8 +55,8 @@ class AcquisitionStrategy:
             self._K = len(self._arms)
 
             # Hedge state: total rewards G_i and probabilities p_i
-            self._G = torch.zeros(self._K, dtype=torch.float64)                 # totals
-            self._p = torch.full((self._K,), 1.0/self._K, dtype=torch.float64)  # probs
+            self._G = np.zeros(self._K, dtype=np.float64)                 # totals
+            self._p = np.full((self._K,), 1.0/self._K, dtype=np.float64)  # probs
 
             self._lambda = float(portfolio_lambda)
             self._delta  = float(portfolio_delta)
@@ -68,9 +69,9 @@ class AcquisitionStrategy:
 
     def get_indices(
         self,
-        mean_prediction: Tensor,
-        std_prediction: Tensor,
-        input_candidates: Optional[Tensor] = None,
+        mean_prediction: np.ndarray,
+        std_prediction: np.ndarray,
+        input_candidates: Optional[np.ndarray] = None,
         n_samples: int = 1,
         skip_indices: Optional[List[int]] = None,
         constant: float = 2.0,
@@ -156,8 +157,8 @@ class AcquisitionStrategy:
 
         # ---------- Common Pareto-metrics ----------
         if self.pareto_metrics:
-            mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
-            std_pred_norm  = normalize_tensor(std_prediction)
+            mean_pred_norm = normalize_array(np.abs(mean_prediction))
+            std_pred_norm  = normalize_array(std_prediction)
             pareto, _, _, _, _, _, _, p_min, p_max = self.compute_pareto_front(mean_pred_norm, std_pred_norm)
             return pareto, selected_indices, p_min, p_max
         else:
@@ -165,25 +166,30 @@ class AcquisitionStrategy:
 
     def _u_function(
         self,
-        mean_prediction: Tensor,
-        std_prediction: Tensor,
+        mean_prediction: np.ndarray,
+        std_prediction: np.ndarray,
         n_samples: int, # Number of samples to select
         skip_indices: Optional[List[int]] # Indices to skip in the pool
     ) -> List[int]:
-        u = mean_prediction.abs() / std_prediction
+        mu = np.asarray(mean_prediction, dtype=np.float64).squeeze()
+        sig = np.asarray(std_prediction, dtype=np.float64).squeeze()
+        u = np.abs(mu) / sig
         if skip_indices is not None:
+            u = u.copy()
             u[skip_indices] = float('inf')
-        _, u_idx = u.squeeze().topk(n_samples, largest=False)
+        u_idx = np.argsort(u)[:n_samples]
         return u_idx.tolist()
 
     def _eff_function(
         self,
-        mean_prediction: Tensor,
-        std_prediction: Tensor,
+        mean_prediction: np.ndarray,
+        std_prediction: np.ndarray,
         n_samples: int, # Number of samples to select
         skip_indices: Optional[List[int]], # Indices to skip in the pool
         constant: float = 2.0
     ) -> List[int]:
+        mean_prediction = np.asarray(mean_prediction, dtype=np.float64).squeeze()
+        std_prediction = np.asarray(std_prediction, dtype=np.float64).squeeze()
         eps = constant * std_prediction
         eff = (
             mean_prediction
@@ -205,14 +211,15 @@ class AcquisitionStrategy:
             )
         )
         if skip_indices is not None:
+            eff = eff.copy()
             eff[skip_indices] = float('-inf')
-        _, eff_idx = eff.squeeze().topk(n_samples)
+        eff_idx = np.argsort(eff)[-n_samples:][::-1]
         return eff_idx.tolist()
 
     def _erf_function(
         self,
-        mean_prediction: torch.Tensor,
-        std_prediction: torch.Tensor,
+        mean_prediction: np.ndarray,
+        std_prediction: np.ndarray,
         n_samples: int,                         # number of samples to select
         skip_indices: Optional[List[int]] = None  # indices to skip in the pool
     ) -> List[int]:
@@ -221,27 +228,28 @@ class AcquisitionStrategy:
         Selects the indices corresponding to the largest ERF values.
         Reference: Yang et al. (2015) ALK-HRA with Expected Risk Function.
         """
-        mu = mean_prediction.squeeze()
-        sig = std_prediction.squeeze()
+        mu = np.asarray(mean_prediction, dtype=np.float64).squeeze()
+        sig = np.asarray(std_prediction, dtype=np.float64).squeeze()
 
-        sgn = torch.where(mu >= 0, torch.tensor(1.0), torch.tensor(-1.0))
+        sgn = np.where(mu >= 0.0, 1.0, -1.0)
         z = mu / sig
 
-        phi = torch.from_numpy(norm.pdf(z.numpy()))
-        Phi_neg = torch.from_numpy(norm.cdf((-sgn * z).numpy()))
+        phi = norm.pdf(z)
+        Phi_neg = norm.cdf(-sgn * z)
 
         erf_val = -sgn * mu * Phi_neg + sig * phi  # larger = higher expected risk
 
         if skip_indices is not None:
+            erf_val = erf_val.copy()
             erf_val[skip_indices] = float('-inf')
 
-        _, idx = erf_val.topk(n_samples, largest=True)
+        idx = np.argsort(erf_val)[-n_samples:][::-1]
         return idx.tolist()
 
     def _reif_function(
         self,
-        mean_prediction: torch.Tensor,
-        std_prediction: torch.Tensor,
+        mean_prediction: np.ndarray,
+        std_prediction: np.ndarray,
         n_samples: int,
         skip_indices: Optional[List[int]] = None,
         w: float = 2.0,  # as suggested in the paper
@@ -251,33 +259,31 @@ class AcquisitionStrategy:
         where E[|N(μ, σ²)|] = σ*sqrt(2/pi)*exp(-0.5*(μ/σ)^2) + μ*(1 - 2*Φ(μ/σ))
         Reference: Zhang, Wang & Sørensen (2019), RESS. REIF/REIF2. 
         """
-        mu = mean_prediction.squeeze()
-        sig = std_prediction.squeeze()
+        mu = np.asarray(mean_prediction, dtype=np.float64).squeeze()
+        sig = np.asarray(std_prediction, dtype=np.float64).squeeze()
 
         # compute beta = mu/sig
         beta_np = (mu / sig)
-        Phi_beta = torch.from_numpy(norm.cdf(beta_np.numpy()))
+        Phi_beta = norm.cdf(beta_np)
 
         # folded-normal expectation E|ĝ|
-        term_var = (w - np.sqrt(2.0/np.pi) * torch.exp(-0.5 * (beta_np)**2))
+        term_var = (w - np.sqrt(2.0/np.pi) * np.exp(-0.5 * (beta_np)**2))
         term_mean = mu * (1.0 - 2.0 * Phi_beta)
 
         reif = term_mean + sig * term_var # larger is better
 
-        if skip_indices:
+        if skip_indices is not None:
+            reif = reif.copy()
             reif[skip_indices] = float('-inf')
 
-        k = min(n_samples, reif.numel() - (len(skip_indices) if skip_indices else 0))
-        if k <= 0:
-            return []
-        _, idx = reif.topk(k, largest=True)
+        idx = np.argsort(reif)[-n_samples:][::-1]
         return idx.tolist()
     
     def _reif2_function(
         self,
-        mean_prediction: torch.Tensor,
-        std_prediction: torch.Tensor,
-        input_candidates: torch.Tensor,   # f_X(x) evaluated at each candidate (same shape as mu)
+        mean_prediction: np.ndarray,
+        std_prediction: np.ndarray,
+        input_candidates: np.ndarray,   # f_X(x) evaluated at each candidate (same shape as mu)
         n_samples: int,
         skip_indices: Optional[List[int]] = None,
         w: float = 2.0,
@@ -287,44 +293,42 @@ class AcquisitionStrategy:
         Same REIF core as above, with multiplicative modulation by the input PDF.
         Reference: Zhang, Wang & Sørensen (2019), RESS. REIF/REIF2.
         """
-        mu = mean_prediction.squeeze()
-        sig = std_prediction.squeeze()
+        mu = np.asarray(mean_prediction, dtype=np.float64).squeeze()
+        sig = np.asarray(std_prediction, dtype=np.float64).squeeze()
         fx = self.std_normal_pdf_product(input_candidates)
 
         # compute beta = mu/sig
         beta_np = (mu / sig)
-        Phi_beta = torch.from_numpy(norm.cdf(beta_np.numpy()))
+        Phi_beta = norm.cdf(beta_np)
 
         # folded-normal expectation E|ĝ|
-        term_var = (w - np.sqrt(2.0/np.pi) * torch.exp(-0.5 * (beta_np)**2))
+        term_var = (w - np.sqrt(2.0/np.pi) * np.exp(-0.5 * (beta_np)**2))
         term_mean = mu * (1.0 - 2.0 * Phi_beta)
 
         reif = term_mean + sig * term_var # larger is better
         reif2 = reif * fx
 
-        if skip_indices:
+        if skip_indices is not None:
+            reif2 = reif2.copy()
             reif2[skip_indices] = float('-inf')
 
-        k = min(n_samples, reif2.numel() - (len(skip_indices) if skip_indices else 0))
-        if k <= 0:
-            return []
-        _, idx = reif2.topk(k, largest=True)
+        idx = np.argsort(reif2)[-n_samples:][::-1]
         return idx.tolist()
 
     def get_moo(
         self,
-        mean_prediction: Tensor,
-        std_prediction: Tensor,
+        mean_prediction: np.ndarray,
+        std_prediction: np.ndarray,
         method: Optional[str] = None,  # 'knee', 'compromise' or 'reliability'
-        pf_estimate: Optional[Tensor] = None, # Current Pf estimate for reliability method (if applicable)
+        pf_estimate: Optional[float] = None, # Current Pf estimate for reliability method (if applicable)
     ) -> List[int]:
         """
         Multi-objective selection via Pareto front.
         method: 'knee', 'compromise' or 'reliability'
         """
         # Compute the Pareto front
-        mean_pred_norm = normalize_tensor(torch.abs(mean_prediction))
-        std_pred_norm = normalize_tensor(std_prediction)
+        mean_pred_norm = normalize_array(np.abs(mean_prediction))
+        std_pred_norm = normalize_array(std_prediction)
         pareto_front, pareto_front_indices, _, knee_idx, _, comp_idx, _, p_min, p_max = self.compute_pareto_front(
             mean_pred_norm, std_pred_norm
         )
@@ -335,147 +339,90 @@ class AcquisitionStrategy:
             return pareto_front, [int(comp_idx)], p_min, p_max
         elif method == 'reliability':
             moo_pareto_index = self.get_moo_reliability(pareto_front=pareto_front, pf_estimate=pf_estimate)
-            return pareto_front, [pareto_front_indices[moo_pareto_index].item()], p_min, p_max
+            return pareto_front, [int(pareto_front_indices[moo_pareto_index])], p_min, p_max
         elif method == 'eps_greedy':
             pos_on_front = self.get_moo_eps_greedy(pareto_front)
-            return pareto_front, [pareto_front_indices[pos_on_front].item()], p_min, p_max
+            return pareto_front, [int(pareto_front_indices[pos_on_front])], p_min, p_max
         elif method == 'eps_lw':
             pos_on_front = self.get_moo_eps_euclidean(pareto_front)
-            return pareto_front, [pareto_front_indices[pos_on_front].item()], p_min, p_max
+            return pareto_front, [int(pareto_front_indices[pos_on_front])], p_min, p_max
         else:
             raise ValueError(f"Unknown MO pareto strategy: {method}")
 
     def compute_pareto_front(
         self,
-        mean_pred: Tensor,
-        std_pred: Tensor
+        mean_pred: np.ndarray,
+        std_pred: np.ndarray
     ):
+        mean_pred = np.asarray(mean_pred, dtype=np.float64).squeeze()
+        std_pred = np.asarray(std_pred, dtype=np.float64).squeeze()
+
         # Negate mean_pred for minimization via maximization logic
-        objectives = torch.stack([-mean_pred, std_pred], dim=1)
-        is_pareto = torch.ones(objectives.size(0), dtype=torch.bool)
+        objectives = np.stack([-mean_pred, std_pred], axis=1)
+        is_pareto = np.ones(objectives.shape[0], dtype=bool)
         for i, pt in enumerate(objectives):
             if is_pareto[i]:
-                dominated = torch.all(objectives <= pt, dim=1) & torch.any(objectives < pt, dim=1)
+                dominated = np.all(objectives <= pt, axis=1) & np.any(objectives < pt, axis=1)
                 is_pareto[dominated] = False
-        indices = torch.nonzero(is_pareto, as_tuple=False).flatten()
+        indices = np.flatnonzero(is_pareto)
         # -----------------------------------
         front = objectives[is_pareto]
-        # This handles the case where front[:,0].argsort() returns tensor([0]) 
-        if indices.dim() == 0 or indices.size(0) == 1:
-            # If indices is a scalar, convert it to a 1D tensor before proceeding
-            if indices.dim() == 0:
-                indices = indices.unsqueeze(0)
-            
-            # Since the front has only one point, it is the knee and compromised point
-            front = objectives[is_pareto]
-            order = front[:,0].argsort()
-            
-            # Since indices is now guaranteed to be 1D, this line should work
+        if indices.size == 1:
+            order = np.argsort(front[:, 0])
             indices = indices[order]
             front = front[order]
-            
-            knee_pt = front[0].clone()
-            knee_idx = torch.tensor(0, device=indices.device)
-            comp_pt = front[0].clone()
-            comp_idx = torch.tensor(0, device=indices.device)
-            ideal_pt = front[0].clone() # Assuming ideal_pt is the point itself in this case
-            
-            return front, indices, knee_pt, indices[knee_idx], comp_pt, indices[comp_idx], ideal_pt
+
+            knee_pt = front[0].copy()
+            comp_pt = front[0].copy()
+            ideal_pt = front[0].copy()
+            pareto_min_vals = front.copy()
+            pareto_max_vals = front.copy()
+
+            return front, indices, knee_pt, int(indices[0]), comp_pt, int(indices[0]), ideal_pt, pareto_min_vals, pareto_max_vals
         
         # Normalize the Pareto front to [0, 1]
-        pareto_min_vals = front.min(dim=0, keepdim=True).values # Minimum values for normalization
-        pareto_max_vals = front.max(dim=0, keepdim=True).values # Maximum values for normalization
-        front = (front - pareto_min_vals) / (pareto_max_vals - pareto_min_vals)
+        pareto_min_vals = np.min(front, axis=0, keepdims=True) # Minimum values for normalization
+        pareto_max_vals = np.max(front, axis=0, keepdims=True) # Maximum values for normalization
+        denom = pareto_max_vals - pareto_min_vals
+        denom[denom == 0.0] = 1.0
+        front = (front - pareto_min_vals) / denom
         # Sort by first objective
-        order = front[:,0].argsort()
+        order = np.argsort(front[:,0])
         front = front[order]
         indices = indices[order]
         knee_pt, knee_idx = self.calculate_knee_point(front)
         comp_pt, comp_idx, ideal_pt = self.calculate_compromised_point(front)
         
-        return front, indices, knee_pt, indices[knee_idx], comp_pt, indices[comp_idx], ideal_pt, pareto_min_vals, pareto_max_vals
+        return front, indices, knee_pt, int(indices[knee_idx]), comp_pt, int(indices[comp_idx]), ideal_pt, pareto_min_vals, pareto_max_vals
 
-    def calculate_knee_point(self, pareto_front: Tensor):
+    def calculate_knee_point(self, pareto_front: np.ndarray):
         p1, p2 = pareto_front[0], pareto_front[-1]
         line = p2 - p1
-        line = line / torch.norm(line)
-        dists = torch.zeros(pareto_front.size(0))
+        line = line / np.linalg.norm(line)
+        dists = np.zeros(pareto_front.shape[0], dtype=np.float64)
         for i, pt in enumerate(pareto_front):
             vec = pt - p1
-            proj = p1 + torch.dot(vec, line) * line
-            dists[i] = torch.norm(pt - proj)
-        idx = torch.argmax(dists)
+            proj = p1 + np.dot(vec, line) * line
+            dists[i] = np.linalg.norm(pt - proj)
+        idx = int(np.argmax(dists))
         return pareto_front[idx], idx
 
-    def calculate_compromised_point(self, pareto_front: Tensor):
-        ideal = torch.max(pareto_front, dim=0).values
-        dists = torch.norm(pareto_front - ideal, dim=1)
-        idx = torch.argmin(dists)
+    def calculate_compromised_point(self, pareto_front: np.ndarray):
+        ideal = np.max(pareto_front, axis=0)
+        dists = np.linalg.norm(pareto_front - ideal, axis=1)
+        idx = int(np.argmin(dists))
         return pareto_front[idx], idx, ideal
         
     def logistic_gamma(self, delta_P, delta_P0=0.2, k=40):
         gamma_max = 0.9
         gamma = gamma_max*(1 / (1 + np.exp(-k * (delta_P - delta_P0))))
         return gamma
-    
-    # def logistic_gamma(self, delta_P, delta_P0=0.2, k=40):
-    #     # --- Dimension-aware cap ---
-    #     gamma_low  = 0.8    # cap in very high dimension
-    #     gamma_high = 1.0    # cap in low dimension
-    #     d_low      = 5      # ref low dimensionality
-    #     d_high     = 10     # ref high dimensionality
-    #     dim = self.input_dim
-        
-    #     if dim <= d_low:
-    #         gamma_cap = gamma_high
-    #     elif dim >= d_high:
-    #         gamma_cap = gamma_low
-    #     else:
-    #         alpha = (dim - d_low) / (d_high - d_low)  # in (0,1)
-    #         gamma_cap = gamma_high - alpha * (gamma_high - gamma_low)
-    #     # --- Logistic scaled by gamma_cap ---
-    #     gamma = gamma_cap / (1.0 + np.exp(-k * (delta_P - delta_P0)))
-    #     return gamma
 
-    def std_normal_pdf_product(self, input_candidates: np.ndarray) -> torch.Tensor:
+    def std_normal_pdf_product(self, input_candidates: np.ndarray) -> np.ndarray:
         pdf = norm.pdf(input_candidates)                 # (N, D)
         pdf_joint = pdf.prod(axis=1)              # independent product
-        return torch.from_numpy(pdf_joint)
+        return pdf_joint
 
-    # def get_moo_reliability(self, pareto_front, pf_estimate):
-    #     # Extract mean predictions and standard deviations
-    #     normalized_mean = pareto_front[:, 0]
-    #     normalized_std = pareto_front[:, 1]
-    #             # Checking Pf rel. difference to choose gamma behaviour
-    #     Pf_current = pf_estimate
-
-    #     # Calculate the relative difference from the previous Pf
-    #     if self.Pf_prev != 0:
-    #         delta_Pf = abs(Pf_current - self.Pf_prev) / self.Pf_prev
-    #     else:
-    #         delta_Pf = 1e2  # Handle division by zero
-
-    #     # Update the buffer with the latest delta_Pf
-    #     self.delta_Pf_buffer.append(delta_Pf)
-    #     if len(self.delta_Pf_buffer) > self.N_it:
-    #         self.delta_Pf_buffer.pop(0)  # Keep only the last N values
-
-    #     delta_avg = float(np.mean(self.delta_Pf_buffer))
-        
-    #     gamma = self.logistic_gamma(delta_avg, delta_P0=self.delta_P0, k=self.k_balance)
-    #     print(f'delta_pf_avg: {delta_avg:.3f}, gamma_log: {gamma:.3f} \n')
-    #     # Update previous Pf for next iteration
-    #     self.Pf_prev = Pf_current
-        
-    #     # Calculate the scalar scores with the desired gamma mapping
-    #     scores = (1 - gamma) * normalized_mean + gamma * normalized_std
-
-    #     # Assign weights to samples
-    #     weights = scores / scores.sum()
-    #     arg_max = np.argmax(weights).item()
-    #     # mo_reliability = pareto_front[arg_max]
-    #     return arg_max
-    
     def get_moo_reliability(self, pareto_front, pf_estimate):
         # Checking Pf rel. difference to choose gamma behaviour
         Pf_current = pf_estimate
@@ -517,7 +464,7 @@ class AcquisitionStrategy:
         # Weighted squared distance to ideal point (no need sqrt for argmin)
         dist_sq = w_mean * (delta_mean ** 2) + w_std * (delta_std ** 2)
 
-        arg_min = int(torch.argmin(dist_sq).item())
+        arg_min = int(np.argmin(dist_sq))
         return arg_min
 
     def _eps_value(self) -> float:
@@ -527,12 +474,12 @@ class AcquisitionStrategy:
         frac = min(1.0, self._eps_t / self.eps_T)
         return self.eps_start + (self.eps_end - self.eps_start) * frac
 
-    def get_moo_eps_greedy(self, pareto_front: torch.Tensor) -> int:
+    def get_moo_eps_greedy(self, pareto_front: np.ndarray) -> int:
         """
         Deterministic epsilon-greedy along the sorted Pareto front.
         Maps epsilon to a position from 0 (explore) -> K-1 (exploit).
         """
-        K = pareto_front.size(0)
+        K = pareto_front.shape[0]
         if K == 0:
             raise ValueError("Empty Pareto front.")
         eps = self._eps_value()              # 1.0 -> 0.0 over time
@@ -547,9 +494,9 @@ class AcquisitionStrategy:
 
     def _portfolio_step(
         self,
-        mean_prediction: torch.Tensor,
-        std_prediction: torch.Tensor,
-        input_candidates: Optional[torch.Tensor],  # needed for REIF2
+        mean_prediction: np.ndarray,
+        std_prediction: np.ndarray,
+        input_candidates: Optional[np.ndarray],  # needed for REIF2
         skip_indices: Optional[List[int]] = None
     ) -> int:
         """
@@ -563,8 +510,8 @@ class AcquisitionStrategy:
         if input_candidates is None:
             # Only REIF2 needs candidates; we still require it here to keep interface simple
             raise ValueError("`input_candidates` (N,D) is required (for REIF2 portfolio arm).")
-        mu = mean_prediction.squeeze().to(torch.float64)
-        sig = std_prediction.squeeze().to(torch.float64)
+        mu = np.asarray(mean_prediction, dtype=np.float64).squeeze()
+        sig = np.asarray(std_prediction, dtype=np.float64).squeeze()
 
         # 1) Each arm proposes best index (reuses your existing functions)
         arm_best: List[int] = []
@@ -575,8 +522,8 @@ class AcquisitionStrategy:
         arm_best.append(self._reif2_function(mu, sig, input_candidates, n_samples=1, skip_indices=skip_indices)[0])
 
         # 2) rewards r_i = -|mu(best_i)|
-        mu_best = mu[torch.as_tensor(arm_best, dtype=torch.long)]
-        rewards = -mu_best.abs().to(torch.float64)
+        mu_best = mu[np.asarray(arm_best, dtype=int)]
+        rewards = -np.abs(mu_best).astype(np.float64)
         # 3) totals update with memory
         self._G = self._delta * self._G + rewards
 
@@ -584,15 +531,15 @@ class AcquisitionStrategy:
         Gmax = float(self._G.max())
         Gmin = float(self._G.min())
         if Gmax == Gmin:
-            self._p = torch.full((self._K,), 1.0 / self._K, dtype=torch.float64)
+            self._p = np.full((self._K,), 1.0 / self._K, dtype=np.float64)
         else:
-            q = (self._G - Gmax) / (Gmax - Gmin)   # ∈ [-1,0]
+            q = (self._G - Gmax) / (Gmax - Gmin)   # in [-1,0]
             logits = self._lambda * q
             m = float(logits.max())
-            expv = torch.exp(logits - m)
+            expv = np.exp(logits - m)
             self._p = expv / expv.sum()
         # sample one arm and return its proposed index
-        arm_idx = int(np.random.choice(self._K, p=self._p.numpy()))
+        arm_idx = int(np.random.choice(self._K, p=self._p))
         chosen_idx = int(arm_best[arm_idx])
 
         # tracking
@@ -602,13 +549,13 @@ class AcquisitionStrategy:
         self.rewards_history.append(self._G.tolist())
         return chosen_idx
 
-    def get_moo_eps_weighted(self, pareto_front: torch.Tensor) -> int:
+    def get_moo_eps_weighted(self, pareto_front: np.ndarray) -> int:
         """
         Epsilon-greedy via linear scalarization on the current Pareto front.
         gamma = eps in [0..1]: 1 -> exploration (std), 0 -> exploitation (|mean| proxy).
         Returns the *index on the Pareto set* (map to full pool outside as usual).
         """
-        K = pareto_front.size(0)
+        K = pareto_front.shape[0]
         if K == 0:
             raise ValueError("Empty Pareto front.")
         if K == 1:
@@ -621,9 +568,9 @@ class AcquisitionStrategy:
         pf = pareto_front
 
         # Per-column min-max normalize on the *current* front (robust to changing K / scale)
-        col_min, _ = torch.min(pf, dim=0)
-        col_max, _ = torch.max(pf, dim=0)
-        denom = torch.clamp(col_max - col_min, min=1e-12)
+        col_min = np.min(pf, axis=0)
+        col_max = np.max(pf, axis=0)
+        denom = np.maximum(col_max - col_min, 1e-12)
         pf_norm = (pf - col_min) / denom  # shape (K, 2), in [0,1]
 
         # Epsilon schedule -> gamma (weight on exploration)
@@ -632,12 +579,12 @@ class AcquisitionStrategy:
         # Linear scalarization and selection
         # scores = (1 - gamma) * exploitation + gamma * exploration
         scores = (1.0 - gamma) * pf_norm[:, 0] + gamma * pf_norm[:, 1]
-        idx_on_front = int(torch.argmax(scores).item())
+        idx_on_front = int(np.argmax(scores))
 
         self._eps_t += 1
         return idx_on_front
 
-    def get_moo_eps_euclidean(self, pareto_front: torch.Tensor) -> int:
+    def get_moo_eps_euclidean(self, pareto_front: np.ndarray) -> int:
         """
         Epsilon-greedy via Euclidean-compromise scalarization on the current Pareto front.
 
@@ -648,12 +595,12 @@ class AcquisitionStrategy:
         1) Min-max normalize each objective on the current front to [0,1].
         2) Define an ideal point at (1,1).
         3) Compute weighted distance to the ideal point:
-            d^2 = w * ?f_mu^2 + (1 - w) * ?f_sigma^2
-            where ?f_mu = 1 - f_mu_norm, ?f_sigma = 1 - f_sigma_norm.
+            d^2 = w * δf_mu^2 + (1 - w) * δf_sigma^2
+            where δf_mu = 1 - f_mu_norm, δf_sigma = 1 - f_sigma_norm.
         4) Select argmin d^2.
         """
 
-        K = pareto_front.size(0)
+        K = pareto_front.shape[0]
         if K == 0:
             raise ValueError("Empty Pareto front.")
         if K == 1:
@@ -663,9 +610,9 @@ class AcquisitionStrategy:
         pf = pareto_front
 
         # 1) Per-column min-max normalization on the current Pareto front
-        col_min, _ = torch.min(pf, dim=0)
-        col_max, _ = torch.max(pf, dim=0)
-        denom = torch.clamp(col_max - col_min, min=1e-12)
+        col_min = np.min(pf, axis=0)
+        col_max = np.max(pf, axis=0)
+        denom = np.maximum(col_max - col_min, 1e-12)
         pf_norm = (pf - col_min) / denom  # shape (K, 2), values in [0,1]
 
         # 2) Distances to the ideal point (1,1)
@@ -676,11 +623,11 @@ class AcquisitionStrategy:
         # eps ~ 1 => emphasize exploration
         # eps ~ 0 => emphasize exploitation
         eps = float(self._eps_value())
-        w   = 1.0 - eps           # w in [0,1];
+        w   = 1.0 - eps           # w in [0,1]
 
         # Weighted squared distance (no need to take sqrt: argmin is the same)
         dist_sq = w * (delta_mu ** 2) + (1.0 - w) * (delta_sigma ** 2)
 
-        idx_on_front = int(torch.argmin(dist_sq).item())
+        idx_on_front = int(np.argmin(dist_sq))
         self._eps_t += 1
         return idx_on_front
