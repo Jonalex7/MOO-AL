@@ -10,7 +10,6 @@ The required Python packages are listed in `requirements.txt`:
 
 ```text
 numpy==1.26.1
-torch==2.4.0
 scikit-learn==1.5.1
 ```
 
@@ -90,4 +89,3 @@ This will:
 4. Optionally at each iteration collect Pareto front and selected sample if `pareto_metrics` is enabled.
 
 ---
-

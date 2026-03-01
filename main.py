@@ -1,11 +1,9 @@
 import datetime
-import pickle
 import os
 import argparse
 import json
 import time
 
-import torch
 import numpy as np
 import yaml
 from sklearn.gaussian_process import GaussianProcessRegressor
@@ -15,7 +13,7 @@ import wandb
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import AcquisitionStrategy
-from utils.data import isoprobabilistic_transform, custom_optimizer, normalize_tensor, parallel_predict
+from utils.data import isoprobabilistic_transform, custom_optimizer, normalize_array, parallel_predict
 
 def make_base_kernel(input_dim):
     length_init = np.full(input_dim, 1.0, dtype=np.float64)
@@ -85,7 +83,6 @@ def main(config, name_exp):
         seed_exp=int(seed_exp)
 
     np.random.seed(seed_exp)
-    torch.manual_seed(seed_exp)
     random_state = np.random.RandomState(seed_exp)
     config['seed'] = seed_exp  #saving seed
 
@@ -95,9 +92,8 @@ def main(config, name_exp):
     
     # Design of experiments
     x_train_norm, _ , y_train = lstate.get_doe(n_samples=passive_samples, method='lhs', random_state=random_state)
-    # Ensure x_train_norm and y_train are 64-bit
-    x_train_norm = x_train_norm.double() 
-    y_train = y_train.double()
+    x_train_norm = np.asarray(x_train_norm, dtype=np.float64)
+    y_train = np.asarray(y_train, dtype=np.float64)
 
     iterations = int((total_samples-passive_samples)/al_batch) + 1 # number of iterations
 
@@ -190,7 +186,7 @@ def main(config, name_exp):
         # Pf estimation with MCs
         x_mcs_pf = np.random.normal(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
         mean_pf, _ = parallel_predict(model_gp, x_mcs_pf)
-        Pf_model = (mean_pf < 0.0).double().mean().item()
+        Pf_model = float(np.mean(mean_pf < 0.0))
         Pf_rel_diff = (Pf_model - Pf_ref) / Pf_ref
         pf_evol.append(Pf_model)
         lml_evol.append(lml)
@@ -199,7 +195,7 @@ def main(config, name_exp):
         B_model = - norm.ppf(Pf_model)
         B_rel_diff = (B_model-B_ref)/B_ref
 
-        print(f'Pf_model: {Pf_model:.3E}, Pf_rel_diff: {Pf_rel_diff:.2E}, B_rel_diff: {B_rel_diff.item():.2E}, LML = {lml:.2E}')
+        print(f'Pf_model: {Pf_model:.3E}, Pf_rel_diff: {Pf_rel_diff:.2E}, B_rel_diff: {B_rel_diff:.2E}, LML = {lml:.2E}')
         wandb.log({"Pf_model":Pf_model, "Pf_rel_diff": Pf_rel_diff, "B_rel_diff": B_rel_diff, "LML": lml}, step=it)
 
         # Making predictions of mean and std for mc population 
@@ -227,12 +223,14 @@ def main(config, name_exp):
             std_prediction=std_pred,
             **args_sampling
             )
-            mean_pred_norm = normalize_tensor(torch.abs(mean_pred))
-            std_pred_norm = normalize_tensor(std_pred)
-            selected_objective_norm = torch.tensor([-mean_pred_norm[selected_indices], std_pred_norm[selected_indices]])
+            mean_pred_norm = normalize_array(np.abs(mean_pred))
+            std_pred_norm = normalize_array(std_pred)
+            selected_objective_norm = np.column_stack(
+                (-mean_pred_norm[selected_indices], std_pred_norm[selected_indices])
+            )
             # Saving points for pareto metrics (full Pareto front, and selected sample)
             denom = pmax - pmin
-            denom[denom == 0] = 1.0
+            denom = np.where(denom == 0.0, 1.0, denom)
             selected_local_norm = (selected_objective_norm - pmin) / denom
             pareto_metrics.append((pareto.tolist(), selected_local_norm.tolist()))
         else:
@@ -251,11 +249,10 @@ def main(config, name_exp):
         selected_outputs = lstate.eval_lstate(selected_samples)
 
         # Update the training set
-        selected_samples_torch = torch.tensor(selected_samples_norm)
-        if selected_samples_torch.dim() == 1:
-            selected_samples_torch = selected_samples_torch.unsqueeze(0)
-        x_train_norm = torch.cat((x_train_norm, selected_samples_torch), 0)
-        y_train = torch.cat((y_train, selected_outputs))
+        selected_samples_norm = np.atleast_2d(np.asarray(selected_samples_norm, dtype=np.float64))
+        selected_outputs = np.atleast_1d(np.asarray(selected_outputs, dtype=np.float64))
+        x_train_norm = np.concatenate((x_train_norm, selected_samples_norm), axis=0)
+        y_train = np.concatenate((y_train, selected_outputs), axis=0)
 
         # Saving results
         results_file['Pf_model'] = pf_evol
