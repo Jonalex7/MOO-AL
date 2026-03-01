@@ -1,4 +1,3 @@
-import torch
 import numpy as np
 from scipy.stats import norm
 from scipy.stats import qmc
@@ -67,7 +66,7 @@ class g8d_two_dof_oscillator:
         Evaluate the limit-state in PHYSICAL space.
         x : array-like, shape (n_samples, 8) or (8,)
             Columns: [m_p, m_s, k_p, k_s, ζ_p, ζ_s, F_s, S_0]
-        Returns: torch.Tensor of shape (n_samples,)
+        Returns: numpy.ndarray of shape (n_samples,)
         """
         x = np.array(x, dtype=np.float64)
         if x.ndim == 1:
@@ -108,7 +107,7 @@ class g8d_two_dof_oscillator:
         # G = F_s - 3 k_s * std_resp
         g = Fs - 3.0 * ks * std_resp
 
-        return torch.as_tensor(g, dtype=torch.float64)
+        return np.asarray(g, dtype=np.float64)
 
     def monte_carlo_estimate(self, n_samples):
         """
@@ -124,10 +123,10 @@ class g8d_two_dof_oscillator:
             x_mc_norm, self.standard_marginals, self.physical_marginals
         )
         y_mc = self.eval_lstate(x_mc_physical)
-        Pf_ref = (y_mc < 0.0).double().mean()
+        Pf_ref = np.mean(y_mc < 0.0)
         beta_ref = -norm.ppf(Pf_ref)
 
-        return Pf_ref.item(), beta_ref, x_mc_physical, y_mc
+        return Pf_ref, beta_ref, x_mc_physical, y_mc
 
     def get_doe(self, n_samples=10, method='lhs', random_state=None):
         """
