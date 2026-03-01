@@ -3,6 +3,7 @@ from typing import List, Optional
 import numpy as np
 from scipy.stats import norm
 
+from active_learning.eier import select_eier_index
 from utils.data import normalize_array
 
 
@@ -25,6 +26,11 @@ class AcquisitionStrategy:
         eps_T: int = 100,             # number of calls to decay over
         portfolio_lambda: float = 2.0,   # Hedge balance (lambda)
         portfolio_delta: float = 0.7,    # Memory factor (delta)
+        batch_size_acq: int = 500,
+        n_z_mc: int = 64,
+        jitter_stddev: float = 1e-8,
+        local_mis_topk: int = 3000,
+        debug_acq: bool = False,
     ):
         self.strategy = acquisition_strategy.lower().strip()
         self.pareto_metrics = pareto_metrics
@@ -67,11 +73,21 @@ class AcquisitionStrategy:
             # counts per arm
             self.portfolio_counts = {a: 0 for a in self._arms}
 
+        if self.strategy == "eier":
+            self.batch_size_acq = int(batch_size_acq)
+            self.n_z_mc = int(n_z_mc)
+            self.jitter_stddev = float(jitter_stddev)
+            self.local_mis_topk = int(local_mis_topk)
+            self.debug_acq = bool(debug_acq)
+
     def get_indices(
         self,
         mean_prediction: np.ndarray,
         std_prediction: np.ndarray,
         input_candidates: Optional[np.ndarray] = None,
+        model_gp = None,
+        candidate_pool: Optional[np.ndarray] = None,
+        z_seed: Optional[int] = None,
         n_samples: int = 1,
         skip_indices: Optional[List[int]] = None,
         constant: float = 2.0,
@@ -152,6 +168,15 @@ class AcquisitionStrategy:
                 skip_indices,
             )
 
+        # EIER-based selection
+        elif self.strategy == "eier":
+            selected_indices = self._eier_function(
+                model_gp,
+                candidate_pool,
+                n_samples,
+                z_seed,
+            )
+
         else:
             raise ValueError(f"Unknown acquisition strategy '{self.strategy}'")
 
@@ -163,6 +188,34 @@ class AcquisitionStrategy:
             return pareto, selected_indices, p_min, p_max
         else:
             return selected_indices
+
+    def _eier_function(
+        self,
+        model_gp,
+        candidate_pool: Optional[np.ndarray],
+        n_samples: int,
+        z_seed: Optional[int] = None,
+    ) -> List[int]:
+        if n_samples != 1:
+            raise ValueError("EIER strategy currently supports n_samples=1 only.")
+        if model_gp is None:
+            raise ValueError("`model_gp` is required for EIER selection.")
+        if candidate_pool is None:
+            raise ValueError("`candidate_pool` is required for EIER selection.")
+        if z_seed is None:
+            z_seed = 0
+
+        selected_index = select_eier_index(
+            model_gp=model_gp,
+            candidate_pool=candidate_pool,
+            batch_size_acq=self.batch_size_acq,
+            n_z_mc=self.n_z_mc,
+            jitter_stddev=self.jitter_stddev,
+            local_mis_topk=self.local_mis_topk,
+            z_seed=int(z_seed),
+            debug_acq=self.debug_acq,
+        )
+        return [selected_index]
 
     def _u_function(
         self,

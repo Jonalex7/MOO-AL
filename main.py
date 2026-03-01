@@ -122,8 +122,6 @@ def main(config, name_exp):
         args_al['portfolio_delta'] = config['portfolio_delta']    # Memory factor (δ)
 
     if al_strategy == "eier":
-        if al_batch != 1:
-            raise ValueError("EIER strategy currently supports al_batch=1 only.")
         args_al['batch_size_acq'] = config['batch_size_acq']
         args_al['n_z_mc'] = config['n_z_mc']
         args_al['jitter_stddev'] = config['obs_stddev']

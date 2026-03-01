@@ -1,0 +1,25 @@
+# --- active training options ---
+case_study: 'wei_g2' # Specify target LS: four_branch_6, himmelblau, hat, wei_g2, ...
+al_strategy: 'eier'    # eff, u, moo, erf, reif, eier
+al_batch: 1   # EIER currently selects one sample per active iteration
+total_samples: 50   # max number of samples
+passive_samples: 12     # initial DoE with LHS
+n_mcs_pool: 10000  # size of MonteCarlo pool candidates
+seed: null # null for random seed (default)
+
+# --- EIER options ---
+obs_stddev: 1.0e-8  # physical-space observation jitter used by the look-ahead update
+batch_size_acq: 500
+local_mis_topk: 500
+n_z_mc: 1000
+debug_acq: True
+
+# --- reliability estimation---
+n_mcs_pf: 100000 # size of MonteCarlo sampling for pf estimation
+
+#--- output model----
+save_interval: 10
+pareto_metrics: False # If True, compute pareto metrics in the usual AL postprocessing
+
+# wandb logging
+wandb_online: False
