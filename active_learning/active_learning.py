@@ -175,6 +175,7 @@ class AcquisitionStrategy:
                 candidate_pool,
                 n_samples,
                 z_seed,
+                skip_indices,
             )
 
         else:
@@ -195,6 +196,7 @@ class AcquisitionStrategy:
         candidate_pool: Optional[np.ndarray],
         n_samples: int,
         z_seed: Optional[int] = None,
+        skip_indices: Optional[List[int]] = None,
     ) -> List[int]:
         if n_samples != 1:
             raise ValueError("EIER strategy currently supports n_samples=1 only.")
@@ -214,6 +216,7 @@ class AcquisitionStrategy:
             local_mis_topk=self.local_mis_topk,
             z_seed=int(z_seed),
             debug_acq=self.debug_acq,
+            skip_indices=skip_indices,
         )
         return [selected_index]
 
