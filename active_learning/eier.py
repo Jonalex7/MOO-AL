@@ -96,6 +96,75 @@ def misclass_prob(mu: np.ndarray, std: np.ndarray):
     return norm.cdf(z)
 
 
+def _posterior_cov_cross(cache: GPCache, XA: np.ndarray, XB: np.ndarray) -> np.ndarray:
+    K_ab = _matern52_cross(XA, XB, cache.lengthscale, cache.kern_var)
+    K_ax = _matern52_cross(XA, cache.X_train, cache.lengthscale, cache.kern_var)
+    K_bx = _matern52_cross(XB, cache.X_train, cache.lengthscale, cache.kern_var)
+    return (K_ab - (K_ax.dot(cache.Kinv)).dot(K_bx.T)).astype(PRED_DTYPE)
+
+
+def estimate_pf_posterior_samples(
+    cache: GPCache,
+    X_pool_fixed: np.ndarray,
+    N_g: int,
+    batch_size_acq: int,
+    rng: np.random.RandomState,
+):
+    X_pool_fixed = np.asarray(X_pool_fixed, dtype=PRED_DTYPE)
+    N = int(X_pool_fixed.shape[0])
+    N_g = int(N_g)
+    bs = int(batch_size_acq)
+    if N <= 0 or N_g <= 0:
+        raise ValueError("X_pool_fixed and N_g must be positive.")
+
+    # Low-rank posterior trajectory approximation on the fixed pool.
+    M = min(bs, N)
+    idx_ind = rng.choice(N, size=M, replace=False)
+    X_ind = X_pool_fixed[idx_ind]
+
+    mu_pool = np.zeros((N,), dtype=PRED_DTYPE)
+    for s in range(0, N, bs):
+        e = min(s + bs, N)
+        mu_b, _ = _predict_mu_std(cache, X_pool_fixed[s:e])
+        mu_pool[s:e] = mu_b.reshape(-1)
+
+    C_SI = np.zeros((N, M), dtype=PRED_DTYPE)
+    for s in range(0, N, bs):
+        e = min(s + bs, N)
+        C_SI[s:e] = _posterior_cov_cross(cache, X_pool_fixed[s:e], X_ind)
+
+    C_II = _posterior_cov_cross(cache, X_ind, X_ind)
+    C_II = 0.5 * (C_II + C_II.T)
+
+    jitter = np.asarray(1e-10, dtype=PRED_DTYPE)
+    eye_M = np.eye(M, dtype=PRED_DTYPE)
+    L_II = None
+    for _ in range(6):
+        try:
+            L_II = np.linalg.cholesky(C_II + jitter * eye_M)
+            break
+        except np.linalg.LinAlgError:
+            jitter *= 10.0
+    if L_II is None:
+        raise np.linalg.LinAlgError("Failed Cholesky on inducing posterior covariance.")
+
+    B = np.linalg.solve(L_II, C_SI.T).T
+
+    pf_samples = np.zeros((N_g,), dtype=PRED_DTYPE)
+    g_chunk = max(1, min(N_g, bs))
+    for g0 in range(0, N_g, g_chunk):
+        g1 = min(N_g, g0 + g_chunk)
+        eps = rng.normal(size=(M, g1 - g0)).astype(PRED_DTYPE)
+        g_draws = mu_pool[:, None] + B.dot(eps)
+        pf_samples[g0:g1] = np.mean(g_draws < 0.0, axis=0)
+
+    pf_mean = float(np.mean(pf_samples))
+    pf_std = float(np.std(pf_samples, ddof=1)) if N_g > 1 else 0.0
+    pf_cov = float(pf_std / max(pf_mean, 1e-16))
+    ci95 = (float(np.quantile(pf_samples, 0.025)), float(np.quantile(pf_samples, 0.975)))
+    return pf_samples, pf_mean, pf_cov, ci95
+
+
 def build_int_cache_numpy(cache: GPCache, X_int: np.ndarray) -> IntCache:
     Kx = _matern52_cross(X_int, cache.X_train, cache.lengthscale, cache.kern_var)
     muX_norm = Kx.dot(cache.alpha)
@@ -188,6 +257,7 @@ def select_eier_index(
     local_mis_topk: int = 3000,
     z_seed: int = 0,
     debug_acq: bool = False,
+    skip_indices=None,
 ) -> int:
     candidate_pool = np.asarray(candidate_pool, dtype=PRED_DTYPE)
     if candidate_pool.ndim != 2 or candidate_pool.shape[0] == 0:
@@ -197,6 +267,14 @@ def select_eier_index(
     n_pool_total, dim = candidate_pool.shape
     bs_acq = int(batch_size_acq)
     n_z = int(n_z_mc)
+    candidate_mask = np.ones((n_pool_total,), dtype=bool)
+    if skip_indices is not None:
+        skip_idx = np.asarray(skip_indices, dtype=int).reshape(-1)
+        if skip_idx.size > 0:
+            valid_skip = skip_idx[(skip_idx >= 0) & (skip_idx < n_pool_total)]
+            candidate_mask[valid_skip] = False
+    if not np.any(candidate_mask):
+        raise RuntimeError("EIER candidate set is empty after applying skip_indices.")
 
     use_topk_filter = int(local_mis_topk) > 0
     k_keep = min(int(local_mis_topk), n_pool_total) if use_topk_filter else bs_acq
@@ -212,6 +290,7 @@ def select_eier_index(
             X_cand = candidate_pool[start:end]
             mu, std = _predict_mu_std(cache, X_cand)
             local_score = misclass_prob(mu.reshape(-1), std.reshape(-1)).astype(PRED_DTYPE)
+            local_score = np.where(candidate_mask[start:end], local_score, -np.inf)
             batch_idx = np.arange(start, end, dtype=int)
             top_scores, top_idx = _merge_topk_indices(top_scores, top_idx, local_score, batch_idx, k_keep)
 
@@ -269,7 +348,11 @@ def select_eier_index(
     for b_cand in range(n_pool_batches):
         c_start = b_cand * bs_acq
         c_end = min(c_start + bs_acq, n_pool_total)
-        X_cand = candidate_pool[c_start:c_end]
+        cand_abs_idx = np.arange(c_start, c_end, dtype=int)
+        cand_abs_idx = cand_abs_idx[candidate_mask[c_start:c_end]]
+        if cand_abs_idx.size == 0:
+            continue
+        X_cand = candidate_pool[cand_abs_idx]
         this_cand_bs = X_cand.shape[0]
         eps_z = rng_z.normal(size=(n_z, this_cand_bs)).astype(PRED_DTYPE)
 
@@ -304,6 +387,6 @@ def select_eier_index(
         gain = float(expected_gain[arg])
         if gain > best_gain:
             best_gain = gain
-            best_idx = c_start + arg
+            best_idx = int(cand_abs_idx[arg])
 
     return int(best_idx)
