@@ -38,6 +38,19 @@ def is_bad_fit(current_lml, prev_lml, lml_drop_tol=50.0, abs_lml_low=-100.0):
     return too_low or big_drop
 
 
+def _resolve_cpu_workers(value):
+    value = int(value)
+    if value == -1:
+        try:
+            return max(1, len(os.sched_getaffinity(0)))
+        except AttributeError:
+            count = os.cpu_count()
+            return 1 if count is None else max(1, int(count))
+    if value < 1:
+        raise ValueError("`cpu_workers` must be a positive integer or -1.")
+    return value
+
+
 def main(config, name_exp):
     wandb_mode = "online" if config.get("wandb_online", False) else "offline"
     # getting args from config file
@@ -85,6 +98,22 @@ def main(config, name_exp):
     np.random.seed(seed_exp)
     random_state = np.random.RandomState(seed_exp)
     config['seed'] = seed_exp  #saving seed
+    predict_batch_size = int(config.get('predict_batch_size', 10000))
+    raw_cpu_workers = config.get('cpu_workers', None)
+    if raw_cpu_workers is not None:
+        resolved_cpu_workers = _resolve_cpu_workers(raw_cpu_workers)
+        predict_n_jobs = resolved_cpu_workers
+        eier_num_workers = resolved_cpu_workers
+        config['cpu_workers'] = int(raw_cpu_workers)
+    else:
+        predict_n_jobs = int(config.get('predict_n_jobs', -1))
+        if predict_n_jobs == -1:
+            predict_n_jobs = _resolve_cpu_workers(-1)
+        eier_num_workers = int(config.get('eier_num_workers', 1))
+    eier_num_workers = max(1, int(eier_num_workers))
+    config['predict_batch_size'] = predict_batch_size
+    config['predict_n_jobs'] = predict_n_jobs
+    config['eier_num_workers'] = eier_num_workers
 
     # Store the config file as a json file
     with open(results_dir + 'config.json', 'w') as file_id:
@@ -122,11 +151,14 @@ def main(config, name_exp):
         args_al['portfolio_delta'] = config['portfolio_delta']    # Memory factor (δ)
 
     if al_strategy == "eier":
+        n_g_pf = int(config.get('n_g_pf', config['n_z_mc']))
         args_al['batch_size_acq'] = config['batch_size_acq']
-        args_al['n_z_mc'] = config['n_z_mc']
+        args_al['n_z_mc'] = n_g_pf
         args_al['jitter_stddev'] = config['obs_stddev']
         args_al['local_mis_topk'] = config['local_mis_topk']
         args_al['debug_acq'] = config.get('debug_acq', False)
+        args_al['eier_num_workers'] = eier_num_workers
+        args_al['z_chunk_size'] = int(config.get('z_chunk_size', 64))
         
     # Initialize the acquisition strategy
     strategy = AcquisitionStrategy(**args_al)
@@ -198,7 +230,12 @@ def main(config, name_exp):
 
         # Pf estimation with MCs
         x_mcs_pf = np.random.normal(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
-        mean_pf, _ = parallel_predict(model_gp, x_mcs_pf)
+        mean_pf, _ = parallel_predict(
+            model_gp,
+            x_mcs_pf,
+            n_jobs=predict_n_jobs,
+            batch_size=predict_batch_size,
+        )
         Pf_model = float(np.mean(mean_pf < 0.0))
         Pf_rel_diff = (Pf_model - Pf_ref) / Pf_ref
         pf_evol.append(Pf_model)
@@ -213,7 +250,12 @@ def main(config, name_exp):
 
         # Making predictions of mean and std for mc population 
         x_mc_pool = np.random.normal(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
-        mean_pred, std_pred = parallel_predict(model_gp, x_mc_pool)
+        mean_pred, std_pred = parallel_predict(
+            model_gp,
+            x_mc_pool,
+            n_jobs=predict_n_jobs,
+            batch_size=predict_batch_size,
+        )
         
         # arguments for sampling
         args_sampling = {'n_samples': 1, # Number of samples to select
