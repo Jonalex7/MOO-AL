@@ -1,7 +1,14 @@
+from contextlib import nullcontext
+
 import numpy as np
 import scipy.stats as stats
 from scipy.optimize import fmin_l_bfgs_b
 from joblib import Parallel, delayed
+
+try:
+    from threadpoolctl import threadpool_limits
+except ImportError:  # pragma: no cover
+    threadpool_limits = None
 
 def isoprobabilistic_transform(x, source_marginals, target_marginals):
     # Ensure x is a numpy array
@@ -47,15 +54,22 @@ def custom_optimizer(obj_func, initial_theta, bounds):
 def predict_batch(model, x_batch):
     return model.predict(x_batch, return_std=True)
 
-def parallel_predict(model_gp, x_mc_pool, n_jobs=-1):
-    batch_size = 10000
+def parallel_predict(model_gp, x_mc_pool, n_jobs=-1, batch_size=10000, prefer="threads"):
+    x_mc_pool = np.asarray(x_mc_pool, dtype=np.float64)
+    batch_size = max(1, int(batch_size))
     n_batches = int(np.ceil(x_mc_pool.shape[0] / batch_size))
 
     # Split into batches
     batches = [x_mc_pool[i * batch_size: (i + 1) * batch_size] for i in range(n_batches)]
 
-    # Parallel predictions using joblib
-    results = Parallel(n_jobs=n_jobs)(delayed(predict_batch)(model_gp, batch) for batch in batches)
+    if n_batches == 1 or int(n_jobs) == 1:
+        results = [predict_batch(model_gp, batch) for batch in batches]
+    else:
+        limit_ctx = threadpool_limits(limits=1, user_api="blas") if threadpool_limits is not None else nullcontext()
+        with limit_ctx:
+            results = Parallel(n_jobs=n_jobs, prefer=prefer)(
+                delayed(predict_batch)(model_gp, batch) for batch in batches
+            )
 
     # Combining results
     means, stds = zip(*results)
