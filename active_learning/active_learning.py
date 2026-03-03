@@ -177,6 +177,8 @@ class AcquisitionStrategy:
             selected_indices = self._eier_function(
                 model_gp,
                 candidate_pool,
+                mean_prediction,
+                std_prediction,
                 n_samples,
                 z_seed,
                 skip_indices,
@@ -198,6 +200,8 @@ class AcquisitionStrategy:
         self,
         model_gp,
         candidate_pool: Optional[np.ndarray],
+        mean_prediction: np.ndarray,
+        std_prediction: np.ndarray,
         n_samples: int,
         z_seed: Optional[int] = None,
         skip_indices: Optional[List[int]] = None,
