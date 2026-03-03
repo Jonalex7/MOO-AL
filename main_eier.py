@@ -52,6 +52,19 @@ def _fmt_sci(value):
     return f"{value:.3E}"
 
 
+def _resolve_cpu_workers(value):
+    value = int(value)
+    if value == -1:
+        try:
+            return max(1, len(os.sched_getaffinity(0)))
+        except AttributeError:
+            count = os.cpu_count()
+            return 1 if count is None else max(1, int(count))
+    if value < 1:
+        raise ValueError("`cpu_workers` must be a positive integer or -1.")
+    return value
+
+
 def main(config, name_exp):
     wandb_mode = "online" if config.get("wandb_online", False) else "offline"
     # getting args from config file
@@ -101,11 +114,27 @@ def main(config, name_exp):
     np.random.seed(seed_exp)
     random_state = np.random.RandomState(seed_exp)
     config['seed'] = seed_exp  # saving seed
-    n_g_pf = int(config.get('n_g_pf', config.get('n_z_mc', 64)))
-    pf_post_batch_size = int(config.get('pf_post_batch_size', config.get('batch_size_acq', 500)))
+    n_g_pf = int(config.get('n_g_pf', 1000))
+    pf_post_batch_size = int(config.get('pf_post_batch_size', 500))
     pf_post_pool_size = int(config.get('n_pf_post_pool', int(n_mcs_pool)))
+    predict_batch_size = int(config.get('predict_batch_size', 10000))
+    raw_cpu_workers = config.get('cpu_workers', None)
+    if raw_cpu_workers is not None:
+        resolved_cpu_workers = _resolve_cpu_workers(raw_cpu_workers)
+        predict_n_jobs = resolved_cpu_workers
+        eier_num_workers = resolved_cpu_workers
+        config['cpu_workers'] = int(raw_cpu_workers)
+    else:
+        predict_n_jobs = int(config.get('predict_n_jobs', -1))
+        if predict_n_jobs == -1:
+            predict_n_jobs = _resolve_cpu_workers(-1)
+        eier_num_workers = int(config.get('eier_num_workers', 1))
+    eier_num_workers = max(1, int(eier_num_workers))
     config['n_g_pf'] = n_g_pf
     config['pf_post_batch_size'] = pf_post_batch_size
+    config['predict_batch_size'] = predict_batch_size
+    config['predict_n_jobs'] = predict_n_jobs
+    config['eier_num_workers'] = eier_num_workers
 
     # Design of experiments
     x_train_norm, _, y_train = lstate.get_doe(n_samples=passive_samples, method='lhs', random_state=random_state)
@@ -151,10 +180,12 @@ def main(config, name_exp):
 
     if al_strategy == "eier":
         args_al['batch_size_acq'] = config['batch_size_acq']
-        args_al['n_z_mc'] = config['n_z_mc']
+        args_al['n_z_mc'] = n_g_pf
         args_al['jitter_stddev'] = config['obs_stddev']
         args_al['local_mis_topk'] = config['local_mis_topk']
         args_al['debug_acq'] = config.get('debug_acq', False)
+        args_al['eier_num_workers'] = eier_num_workers
+        args_al['z_chunk_size'] = int(config.get('z_chunk_size', 64))
 
     # Initialize the acquisition strategy
     strategy = AcquisitionStrategy(**args_al)
@@ -245,7 +276,12 @@ def main(config, name_exp):
 
         # Pf estimation with MCs
         x_mcs_pf = np.random.normal(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
-        mean_pf, _ = parallel_predict(model_gp, x_mcs_pf)
+        mean_pf, _ = parallel_predict(
+            model_gp,
+            x_mcs_pf,
+            n_jobs=predict_n_jobs,
+            batch_size=predict_batch_size,
+        )
         Pf_model = float(np.mean(mean_pf < 0.0))
         Pf_rel_diff = (Pf_model - Pf_ref) / Pf_ref
         pf_evol.append(Pf_model)
@@ -267,7 +303,7 @@ def main(config, name_exp):
             f"CoV={_fmt_sci(pf_post_cov)} | "
             f"CI95=[{_fmt_sci(pf_post_ci95[0])}, {_fmt_sci(pf_post_ci95[1])}]"
         )
-        print(f"  log_marg_like         : {_fmt_sci(lml)}")
+        # print(f"  log_marg_like         : {_fmt_sci(lml)}")
         wandb.log(
             {
                 "Pf_model": Pf_model,
@@ -288,7 +324,12 @@ def main(config, name_exp):
         x_mc_pool = x_mc_pool_fixed
 
         # Making predictions on the candidate pool
-        mean_pred, std_pred = parallel_predict(model_gp, x_mc_pool)
+        mean_pred, std_pred = parallel_predict(
+            model_gp,
+            x_mc_pool,
+            n_jobs=predict_n_jobs,
+            batch_size=predict_batch_size,
+        )
         active_indices = None
         mean_pred_use = mean_pred
         std_pred_use = std_pred
@@ -369,7 +410,7 @@ def main(config, name_exp):
         x_train_norm = np.concatenate((x_train_norm, selected_samples_norm), axis=0)
         y_train = np.concatenate((y_train, selected_outputs), axis=0)
 
-        print(f"  selected_index        : {selected_indices.tolist()}")
+        # print(f"  selected_index        : {selected_indices.tolist()}")
         print("")
 
         # Saving results
