@@ -5,14 +5,20 @@ al_batch: 1   # EIER currently selects one sample per active iteration
 total_samples: 50   # max number of samples
 passive_samples: 12     # initial DoE with LHS
 n_mcs_pool: 10000  # size of MonteCarlo pool candidates
-seed: null # null for random seed (default)
+seed: 28 # null for random seed (default)
 
 # --- EIER options ---
 obs_stddev: 1.0e-8  # physical-space observation jitter used by the look-ahead update
-batch_size_acq: 500
-local_mis_topk: 500
-n_z_mc: 1000
-debug_acq: True
+batch_size_acq: 500  # acquisition batch size for shortlist scan and integration chunks; controls EIER memory use
+local_mis_topk: 500  # number of low-misclassification candidates kept for full EIER evaluation
+n_g_pf: 1000  # shared sample count: EIER fantasy expectation and posterior-Pf trajectories
+z_chunk_size: 500  # number of fantasy samples processed at once inside the EIER inner loop
+cpu_workers: 8  # shared CPU worker count for GP predictions and filtered EIER reduction; use -1 for all available CPUs
+debug_acq: False  # print EIER debug quantities such as H_n and gain range
+
+# --- prediction helpers ---
+pf_post_batch_size: 500  # chunk size for posterior-trajectory Pf estimation on the fixed support
+predict_batch_size: 10000  # chunk size for standard GP predictions on large pools
 
 # --- reliability estimation---
 n_mcs_pf: 100000 # size of MonteCarlo sampling for pf estimation
