@@ -31,6 +31,8 @@ class AcquisitionStrategy:
         jitter_stddev: float = 1e-8,
         local_mis_topk: int = 3000,
         debug_acq: bool = False,
+        eier_num_workers: int = 1,
+        z_chunk_size: int = 64,
     ):
         self.strategy = acquisition_strategy.lower().strip()
         self.pareto_metrics = pareto_metrics
@@ -79,6 +81,8 @@ class AcquisitionStrategy:
             self.jitter_stddev = float(jitter_stddev)
             self.local_mis_topk = int(local_mis_topk)
             self.debug_acq = bool(debug_acq)
+            self.eier_num_workers = max(1, int(eier_num_workers))
+            self.z_chunk_size = max(1, int(z_chunk_size))
 
     def get_indices(
         self,
@@ -217,6 +221,10 @@ class AcquisitionStrategy:
             z_seed=int(z_seed),
             debug_acq=self.debug_acq,
             skip_indices=skip_indices,
+            mean_prediction=mean_prediction,
+            std_prediction=std_prediction,
+            num_workers=self.eier_num_workers,
+            z_chunk_size=self.z_chunk_size,
         )
         return [selected_index]
 
