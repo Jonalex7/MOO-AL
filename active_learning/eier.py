@@ -20,6 +20,7 @@ class GPCache(NamedTuple):
     X_train_sqnorm: np.ndarray
     alpha: np.ndarray
     Kinv: np.ndarray
+    L: np.ndarray
     lengthscale: np.ndarray
     kern_var: float
     y_mean: float
@@ -89,6 +90,10 @@ def _matern52_cross_to_train(cache: GPCache, X_test: np.ndarray) -> np.ndarray:
     )
 
 
+def _solve_against_train_cholesky(cache: GPCache, K_star: np.ndarray) -> np.ndarray:
+    return np.linalg.solve(cache.L, K_star.T)
+
+
 def build_gp_cache_from_gpr(gpr: GaussianProcessRegressor) -> GPCache:
     kernel_ = gpr.kernel_
     if not (hasattr(kernel_, "k1") and hasattr(kernel_, "k2")):
@@ -103,6 +108,7 @@ def build_gp_cache_from_gpr(gpr: GaussianProcessRegressor) -> GPCache:
     alpha = np.asarray(gpr.alpha_, dtype=PRED_DTYPE).reshape(-1, 1)
     eye = np.eye(n_train, dtype=PRED_DTYPE)
     Kinv = np.linalg.solve(gpr.L_.T, np.linalg.solve(gpr.L_, eye))
+    L = np.asarray(gpr.L_, dtype=PRED_DTYPE)
 
     y_mean = getattr(gpr, "_y_train_mean", 0.0)
     y_std = getattr(gpr, "_y_train_std", 1.0)
@@ -117,6 +123,7 @@ def build_gp_cache_from_gpr(gpr: GaussianProcessRegressor) -> GPCache:
         X_train_sqnorm=X_train_sqnorm.astype(PRED_DTYPE),
         alpha=alpha,
         Kinv=Kinv.astype(PRED_DTYPE),
+        L=L,
         lengthscale=lengthscale,
         kern_var=np.float64(kern_var),
         y_mean=np.float64(y_mean),
@@ -128,8 +135,8 @@ def build_gp_cache_from_gpr(gpr: GaussianProcessRegressor) -> GPCache:
 def _predict_mu_std(cache: GPCache, X_test: np.ndarray):
     K_star = _matern52_cross_to_train(cache, X_test)
     mu_norm = K_star.dot(cache.alpha)
-    v = K_star.dot(cache.Kinv)
-    var_norm = cache.kern_var - np.sum(v * K_star, axis=1, keepdims=True)
+    v = _solve_against_train_cholesky(cache, K_star)
+    var_norm = cache.kern_var - np.sum(v * v, axis=0, keepdims=True).T
     std_norm = np.sqrt(np.maximum(var_norm, np.asarray(1e-12, dtype=PRED_DTYPE)))
 
     mu = cache.y_mean + cache.y_std * mu_norm
@@ -142,11 +149,40 @@ def misclass_prob(mu: np.ndarray, std: np.ndarray):
     return ndtr(z)
 
 
-def _posterior_cov_cross(cache: GPCache, XA: np.ndarray, XB: np.ndarray) -> np.ndarray:
+def _posterior_cov_cross_norm(cache: GPCache, XA: np.ndarray, XB: np.ndarray) -> np.ndarray:
     K_ab = _matern52_cross(XA, XB, cache.lengthscale, cache.kern_var)
     K_ax = _matern52_cross_to_train(cache, XA)
     K_bx = _matern52_cross_to_train(cache, XB)
-    return (K_ab - (K_ax.dot(cache.Kinv)).dot(K_bx.T)).astype(PRED_DTYPE)
+    proj_a = _solve_against_train_cholesky(cache, K_ax)
+    proj_b = _solve_against_train_cholesky(cache, K_bx)
+    return (K_ab - proj_a.T.dot(proj_b)).astype(PRED_DTYPE)
+
+
+def _posterior_cov_cross(cache: GPCache, XA: np.ndarray, XB: np.ndarray) -> np.ndarray:
+    cov_norm = _posterior_cov_cross_norm(cache, XA, XB)
+    return ((cache.y_std ** 2) * cov_norm).astype(PRED_DTYPE)
+
+
+def _stable_cholesky(cov: np.ndarray) -> np.ndarray:
+    cov = np.asarray(cov, dtype=PRED_DTYPE)
+    cov = 0.5 * (cov + cov.T)
+    diag_max = float(np.max(np.diag(cov))) if cov.shape[0] > 0 else 0.0
+    scale = max(diag_max, 1.0)
+    jitter = np.asarray(1e-12 * scale, dtype=PRED_DTYPE)
+    eye = np.eye(cov.shape[0], dtype=PRED_DTYPE)
+
+    for _ in range(10):
+        try:
+            return np.linalg.cholesky(cov + jitter * eye)
+        except np.linalg.LinAlgError:
+            jitter *= 10.0
+
+    min_eig = float(np.min(np.linalg.eigvalsh(cov)))
+    if min_eig < 0.0:
+        jitter = max(float(jitter), -min_eig + 1e-12 * scale)
+        return np.linalg.cholesky(cov + np.asarray(jitter, dtype=PRED_DTYPE) * eye)
+
+    raise np.linalg.LinAlgError("Failed Cholesky on inducing posterior covariance.")
 
 
 def estimate_pf_posterior_samples(
@@ -182,19 +218,7 @@ def estimate_pf_posterior_samples(
         C_SI[s:e] = _posterior_cov_cross(cache, X_pool_fixed[s:e], X_ind)
 
     C_II = _posterior_cov_cross(cache, X_ind, X_ind)
-    C_II = 0.5 * (C_II + C_II.T)
-
-    jitter = np.asarray(1e-10, dtype=PRED_DTYPE)
-    eye_M = np.eye(M, dtype=PRED_DTYPE)
-    L_II = None
-    for _ in range(6):
-        try:
-            L_II = np.linalg.cholesky(C_II + jitter * eye_M)
-            break
-        except np.linalg.LinAlgError:
-            jitter *= 10.0
-    if L_II is None:
-        raise np.linalg.LinAlgError("Failed Cholesky on inducing posterior covariance.")
+    L_II = _stable_cholesky(C_II)
 
     B = np.linalg.solve(L_II, C_SI.T).T
 
