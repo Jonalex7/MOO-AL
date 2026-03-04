@@ -65,6 +65,12 @@ def _resolve_cpu_workers(value):
     return value
 
 
+def _resolve_gp_alpha(config, y_train):
+    y_scale = max(float(np.std(y_train)), 1e-12)
+    alpha = float(config['obs_stddev'] / y_scale) ** 2
+    return max(alpha, float(config.get('min_gp_alpha', 1e-12)))
+
+
 def main(config, name_exp):
     wandb_mode = "online" if config.get("wandb_online", False) else "offline"
     # getting args from config file
@@ -224,9 +230,7 @@ def main(config, name_exp):
 
         gp_alpha = 1e-8
         if al_strategy == "eier":
-            y_scale = float(np.std(y_train))
-            y_scale = max(y_scale, 1e-12)
-            gp_alpha = float(config['obs_stddev'] / y_scale) ** 2
+            gp_alpha = _resolve_gp_alpha(config, y_train)
 
         # Train the Gaussian Process model
         model_gp = GaussianProcessRegressor(
