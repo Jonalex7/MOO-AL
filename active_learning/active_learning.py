@@ -33,6 +33,7 @@ class AcquisitionStrategy:
         debug_acq: bool = False,
         eier_num_workers: int = 1,
         z_chunk_size: int = 64,
+        n_mcs_eier_int: Optional[int] = None,
     ):
         self.strategy = acquisition_strategy.lower().strip()
         self.pareto_metrics = pareto_metrics
@@ -83,6 +84,7 @@ class AcquisitionStrategy:
             self.debug_acq = bool(debug_acq)
             self.eier_num_workers = max(1, int(eier_num_workers))
             self.z_chunk_size = max(1, int(z_chunk_size))
+            self.n_mcs_eier_int = None if n_mcs_eier_int is None else int(n_mcs_eier_int)
 
     def get_indices(
         self,
@@ -218,6 +220,7 @@ class AcquisitionStrategy:
         selected_index = select_eier_index(
             model_gp=model_gp,
             candidate_pool=candidate_pool,
+            n_mcs_eier_int=self.n_mcs_eier_int,
             batch_size_acq=self.batch_size_acq,
             n_z_mc=self.n_z_mc,
             jitter_stddev=self.jitter_stddev,

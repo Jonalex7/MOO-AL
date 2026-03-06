@@ -187,17 +187,18 @@ def _stable_cholesky(cov: np.ndarray) -> np.ndarray:
 
 def estimate_pf_posterior_samples(
     cache: GPCache,
-    X_pool_fixed: np.ndarray,
     N_g: int,
     batch_size_acq: int,
     rng: np.random.RandomState,
+    n_pool_pf: int,
+    input_dim: int,
 ):
-    X_pool_fixed = np.asarray(X_pool_fixed, dtype=PRED_DTYPE)
+    X_pool_fixed = rng.normal(size=(int(n_pool_pf), int(input_dim))).astype(PRED_DTYPE)
     N = int(X_pool_fixed.shape[0])
     N_g = int(N_g)
     x_chunk = int(batch_size_acq)
     if N <= 0 or N_g <= 0:
-        raise ValueError("X_pool_fixed and N_g must be positive.")
+        raise ValueError("`n_pool_pf` and `N_g` must be positive.")
 
     # For reporting only: draw correlated GP trajectories on a fixed support
     # and convert each trajectory into one Pf estimate.
@@ -381,8 +382,8 @@ def _batch_groups(n_batches: int, n_groups: int):
 
 def _accumulate_hnext_sum_for_batch_group(
     cache: GPCache,
-    candidate_pool: np.ndarray,
-    bs_acq: int,
+    integration_pool: np.ndarray,
+    integration_batch_size: int,
     batch_start: int,
     batch_stop: int,
     cand_batches,
@@ -395,9 +396,9 @@ def _accumulate_hnext_sum_for_batch_group(
     partial = np.zeros((n_z, n_short), dtype=PRED_DTYPE)
 
     for b_int in range(batch_start, batch_stop):
-        i_start = b_int * bs_acq
-        i_end = min(i_start + bs_acq, candidate_pool.shape[0])
-        intc = build_int_cache_numpy(cache, candidate_pool[i_start:i_end])
+        i_start = b_int * integration_batch_size
+        i_end = min(i_start + integration_batch_size, integration_pool.shape[0])
+        intc = build_int_cache_numpy(cache, integration_pool[i_start:i_end])
         this_int_bs = float(i_end - i_start)
         for c0, c1, candc, eps_z_batch in cand_batches:
             h_next_zk = eier_hnext_samples_batch_numpy(
@@ -415,6 +416,7 @@ def _accumulate_hnext_sum_for_batch_group(
 def select_eier_index(
     model_gp: GaussianProcessRegressor,
     candidate_pool: np.ndarray,
+    n_mcs_eier_int: Optional[int],
     batch_size_acq: int,
     n_z_mc: int,
     jitter_stddev: float,
@@ -430,20 +432,30 @@ def select_eier_index(
     candidate_pool = np.asarray(candidate_pool, dtype=PRED_DTYPE)
     if candidate_pool.ndim != 2 or candidate_pool.shape[0] == 0:
         raise ValueError("`candidate_pool` must be a non-empty 2D array.")
-
-    # candidate_pool is the fixed support S used both as the candidate set and
-    # as the Monte Carlo support for integrating H_n and H_{n+1}.
     cache = build_gp_cache_from_gpr(model_gp)
-    n_pool_total, dim = candidate_pool.shape
-    bs_acq = int(batch_size_acq)
+    n_cand_total, _ = candidate_pool.shape
+    if n_mcs_eier_int is None:
+        integration_pool = candidate_pool
+    else:
+        n_int_target = int(n_mcs_eier_int)
+        if n_int_target <= 0:
+            raise ValueError("`n_mcs_eier_int` must be positive when provided.")
+        # Per iteration, draw a fresh MC integration support independent from the
+        # candidate pool; use a deterministic offset from z_seed for reproducibility.
+        rng_int = np.random.RandomState(int(z_seed) + 1)
+        integration_pool = rng_int.normal(size=(n_int_target, candidate_pool.shape[1])).astype(PRED_DTYPE)
+    # integration_pool is the MC support used for H_n / H_{n+1} integration.
+    # candidate_pool is used for shortlist and x+ search.
+    n_int_total = int(integration_pool.shape[0])
+    bs_int = max(1, int(batch_size_acq))
     n_z = int(n_z_mc)
     num_workers = max(1, int(num_workers))
     z_chunk_size = max(1, int(z_chunk_size))
-    candidate_mask = np.ones((n_pool_total,), dtype=bool)
+    candidate_mask = np.ones((n_cand_total,), dtype=bool)
     if skip_indices is not None:
         skip_idx = np.asarray(skip_indices, dtype=int).reshape(-1)
         if skip_idx.size > 0:
-            valid_skip = skip_idx[(skip_idx >= 0) & (skip_idx < n_pool_total)]
+            valid_skip = skip_idx[(skip_idx >= 0) & (skip_idx < n_cand_total)]
             candidate_mask[valid_skip] = False
     if not np.any(candidate_mask):
         raise RuntimeError("EIER candidate set is empty after applying skip_indices.")
@@ -451,67 +463,56 @@ def select_eier_index(
     if mean_prediction is not None and std_prediction is not None:
         mean_prediction = np.asarray(mean_prediction, dtype=PRED_DTYPE).reshape(-1)
         std_prediction = np.asarray(std_prediction, dtype=PRED_DTYPE).reshape(-1)
-        if mean_prediction.shape[0] != n_pool_total or std_prediction.shape[0] != n_pool_total:
+        if mean_prediction.shape[0] != n_cand_total or std_prediction.shape[0] != n_cand_total:
             raise ValueError("Precomputed mean/std predictions must match candidate_pool size.")
         local_score_full = misclass_prob(mean_prediction, std_prediction).astype(PRED_DTYPE)
     else:
         local_score_full = None
 
     use_topk_filter = int(local_mis_topk) > 0
-    k_keep = min(int(local_mis_topk), n_pool_total) if use_topk_filter else bs_acq
-    n_pool_batches = (n_pool_total + bs_acq - 1) // bs_acq
+    k_keep = min(int(local_mis_topk), n_cand_total) if use_topk_filter else bs_int
+    n_int_batches = (n_int_total + bs_int - 1) // bs_int
 
     if use_topk_filter:
-        top_scores = np.full((k_keep,), -np.inf, dtype=PRED_DTYPE)
-        top_idx = np.zeros((k_keep,), dtype=int)
-        h_curr_sum = 0.0
-
-        # Pass 1:
-        # - compute H_n on the full fixed pool S
-        # - keep only the local_mis_topk lowest-U / highest-misclassification
-        #   candidates for the expensive look-ahead stage
-        for b in range(n_pool_batches):
-            start = b * bs_acq
-            end = min(start + bs_acq, n_pool_total)
-            if local_score_full is not None:
-                local_score = local_score_full[start:end]
-            else:
-                X_cand = candidate_pool[start:end]
-                mu, std = _predict_mu_std(cache, X_cand)
-                local_score = misclass_prob(mu.reshape(-1), std.reshape(-1)).astype(PRED_DTYPE)
-            h_curr_sum += float(np.sum(local_score))
-            local_score = np.where(candidate_mask[start:end], local_score, -np.inf)
-            batch_idx = np.arange(start, end, dtype=int)
-            top_scores, top_idx = _merge_topk_indices(top_scores, top_idx, local_score, batch_idx, k_keep)
-
-        valid_short = np.isfinite(top_scores)
-        short_idx = top_idx[valid_short]
+        # Pass 1a: shortlist candidates by local misclassification score (U-like).
+        if local_score_full is None:
+            mu, std = _predict_mu_std(cache, candidate_pool)
+            local_score_full = misclass_prob(mu.reshape(-1), std.reshape(-1)).astype(PRED_DTYPE)
+        score_masked = np.where(candidate_mask, local_score_full, -np.inf)
+        n_valid = int(np.sum(candidate_mask))
+        take = min(k_keep, n_valid)
+        if take <= 0:
+            raise RuntimeError("EIER shortlist is empty after applying skip_indices.")
+        part = np.argpartition(score_masked, score_masked.shape[0] - take)[-take:]
+        part = part[np.argsort(score_masked[part])[::-1]]
+        short_idx = part[np.isfinite(score_masked[part])]
         if short_idx.size == 0:
             raise RuntimeError("EIER shortlist is empty.")
+
+        # Pass 1b: compute H_n by integrating over the dedicated integration pool.
+        h_curr_sum = 0.0
+        for b_int in range(n_int_batches):
+            i_start = b_int * bs_int
+            i_end = min(i_start + bs_int, n_int_total)
+            intc = build_int_cache_numpy(cache, integration_pool[i_start:i_end])
+            h_curr_sum += intc.u_curr * float(i_end - i_start)
 
         # Pass 2:
         # for each shortlisted x+, average the clipped reduction
         # max(H_n - H_{n+1}(x+, z), 0) over fantasy outcomes z, while H_{n+1}
-        # is still integrated over the full fixed support S.
+        # is integrated over the dedicated integration pool.
         eps_z_top = np.random.RandomState(int(z_seed)).normal(size=(n_z, short_idx.size)).astype(PRED_DTYPE)
         h_next_sum = np.zeros((n_z, short_idx.size), dtype=PRED_DTYPE)
-        done_pool = n_pool_total
-        cand_batches = []
-        c0 = 0
-        while c0 < short_idx.size:
-            c1 = min(short_idx.size, c0 + bs_acq)
-            cand_batches.append(
-                (
-                    c0,
-                    c1,
-                    build_cand_cache_numpy(cache, candidate_pool[short_idx[c0:c1]], jitter_stddev),
-                    eps_z_top[:, c0:c1],
-                )
-            )
-            c0 = c1
+        done_pool = n_int_total
+        cand_batches = [(
+            0,
+            short_idx.size,
+            build_cand_cache_numpy(cache, candidate_pool[short_idx], jitter_stddev),
+            eps_z_top,
+        )]
 
-        if num_workers > 1 and n_pool_batches > 1:
-            groups = _batch_groups(n_pool_batches, num_workers)
+        if num_workers > 1 and n_int_batches > 1:
+            groups = _batch_groups(n_int_batches, num_workers)
             limit_ctx = threadpool_limits(limits=1, user_api="blas") if threadpool_limits is not None else nullcontext()
             with limit_ctx:
                 with ThreadPoolExecutor(max_workers=len(groups)) as executor:
@@ -519,8 +520,8 @@ def select_eier_index(
                         executor.submit(
                             _accumulate_hnext_sum_for_batch_group,
                             cache,
-                            candidate_pool,
-                            bs_acq,
+                            integration_pool,
+                            bs_int,
                             batch_start,
                             batch_stop,
                             cand_batches,
@@ -534,10 +535,10 @@ def select_eier_index(
         else:
             h_next_sum = _accumulate_hnext_sum_for_batch_group(
                 cache=cache,
-                candidate_pool=candidate_pool,
-                bs_acq=bs_acq,
+                integration_pool=integration_pool,
+                integration_batch_size=bs_int,
                 batch_start=0,
-                batch_stop=n_pool_batches,
+                batch_stop=n_int_batches,
                 cand_batches=cand_batches,
                 z_chunk_size=z_chunk_size,
             )
@@ -552,31 +553,30 @@ def select_eier_index(
             print(
                 f"[EIER dbg][topk] H_n={h_curr:.3e} | "
                 f"gain[min,max]=[{np.min(expected_gain):.3e},{np.max(expected_gain):.3e}] | "
-                f"valid_topk={int(short_idx.size)}"
+                f"valid_topk={int(short_idx.size)} | "
+                f"N_cand={n_cand_total} | N_int={n_int_total}"
             )
 
         return int(short_idx[int(np.argmax(expected_gain))])
 
-    # Exact no-shortlist fallback: evaluate every point in S as a candidate x+.
+    # Exact no-shortlist fallback: evaluate every candidate point as x+.
     # This path is much more expensive and is mainly kept as a reference mode.
     best_gain = -np.inf
     best_idx = 0
     rng_z = np.random.RandomState(int(z_seed))
-    if local_score_full is not None:
-        h_curr_sum = float(np.sum(local_score_full))
-    else:
-        h_curr_sum = 0.0
-        for b in range(n_pool_batches):
-            start = b * bs_acq
-            end = min(start + bs_acq, n_pool_total)
-            mu, std = _predict_mu_std(cache, candidate_pool[start:end])
-            h_curr_sum += float(np.sum(misclass_prob(mu.reshape(-1), std.reshape(-1))))
-    denom_total = max(float(n_pool_total), 1.0)
+    h_curr_sum = 0.0
+    for b_int in range(n_int_batches):
+        i_start = b_int * bs_int
+        i_end = min(i_start + bs_int, n_int_total)
+        intc = build_int_cache_numpy(cache, integration_pool[i_start:i_end])
+        h_curr_sum += intc.u_curr * float(i_end - i_start)
+    denom_total = max(float(n_int_total), 1.0)
     h_curr = h_curr_sum / denom_total
 
-    for b_cand in range(n_pool_batches):
-        c_start = b_cand * bs_acq
-        c_end = min(c_start + bs_acq, n_pool_total)
+    n_cand_batches = (n_cand_total + bs_int - 1) // bs_int
+    for b_cand in range(n_cand_batches):
+        c_start = b_cand * bs_int
+        c_end = min(c_start + bs_int, n_cand_total)
         cand_abs_idx = np.arange(c_start, c_end, dtype=int)
         cand_abs_idx = cand_abs_idx[candidate_mask[c_start:c_end]]
         if cand_abs_idx.size == 0:
@@ -586,10 +586,10 @@ def select_eier_index(
         eps_z = rng_z.normal(size=(n_z, this_cand_bs)).astype(PRED_DTYPE)
 
         h_next_sum = np.zeros((n_z, this_cand_bs), dtype=PRED_DTYPE)
-        for b_int in range(n_pool_batches):
-            i_start = b_int * bs_acq
-            i_end = min(i_start + bs_acq, n_pool_total)
-            intc = build_int_cache_numpy(cache, candidate_pool[i_start:i_end])
+        for b_int in range(n_int_batches):
+            i_start = b_int * bs_int
+            i_end = min(i_start + bs_int, n_int_total)
+            intc = build_int_cache_numpy(cache, integration_pool[i_start:i_end])
             h_next_zk = eier_hnext_samples_batch_numpy(
                 cache=cache,
                 intc=intc,

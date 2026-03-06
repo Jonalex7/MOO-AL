@@ -13,6 +13,7 @@ import wandb
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import AcquisitionStrategy
+from active_learning.eier import build_gp_cache_from_gpr, estimate_pf_posterior_samples
 from utils.data import isoprobabilistic_transform, custom_optimizer, normalize_array, parallel_predict
 
 def make_base_kernel(input_dim):
@@ -36,6 +37,17 @@ def is_bad_fit(current_lml, prev_lml, lml_drop_tol=50.0, abs_lml_low=-100.0):
     else:
         big_drop = current_lml < (prev_lml - lml_drop_tol)
     return too_low or big_drop
+
+
+def _fmt_sci(value):
+    value = float(value)
+    if np.isnan(value):
+        return "nan"
+    if np.isposinf(value):
+        return "inf"
+    if np.isneginf(value):
+        return "-inf"
+    return f"{value:.3E}"
 
 
 def _resolve_cpu_workers(value):
@@ -92,6 +104,9 @@ def main(config, name_exp):
     # Store the evolution of Pf, pareto metrics, and training samples
     results_file = {}
     pf_evol = []
+    pf_post_mean_evol = []
+    pf_post_cov_evol = []
+    pf_post_ci95_evol = []
     pareto_metrics = []
     lml_evol = []
 
@@ -104,6 +119,10 @@ def main(config, name_exp):
     np.random.seed(seed_exp)
     random_state = np.random.RandomState(seed_exp)
     config['seed'] = seed_exp  #saving seed
+    n_g_pf = int(config.get('n_g_pf', 1000))
+    n_mcs_eier_int = int(config.get('n_mcs_eier_int', int(n_mcs_pool)))
+    pf_post_pool_size = int(config.get('n_pf_post_pool', 10000))
+    pf_post_batch_size = int(config.get('pf_post_batch_size', 500))
     predict_batch_size = int(config.get('predict_batch_size', 10000))
     raw_cpu_workers = config.get('cpu_workers', None)
     if raw_cpu_workers is not None:
@@ -117,6 +136,10 @@ def main(config, name_exp):
             predict_n_jobs = _resolve_cpu_workers(-1)
         eier_num_workers = int(config.get('eier_num_workers', 1))
     eier_num_workers = max(1, int(eier_num_workers))
+    config['n_g_pf'] = n_g_pf
+    config['n_mcs_eier_int'] = n_mcs_eier_int
+    config['n_pf_post_pool'] = pf_post_pool_size
+    config['pf_post_batch_size'] = pf_post_batch_size
     config['predict_batch_size'] = predict_batch_size
     config['predict_n_jobs'] = predict_n_jobs
     config['eier_num_workers'] = eier_num_workers
@@ -157,7 +180,6 @@ def main(config, name_exp):
         args_al['portfolio_delta'] = config['portfolio_delta']    # Memory factor (δ)
 
     if al_strategy == "eier":
-        n_g_pf = int(config.get('n_g_pf', config['n_z_mc']))
         args_al['batch_size_acq'] = config['batch_size_acq']
         args_al['n_z_mc'] = n_g_pf
         args_al['jitter_stddev'] = config['obs_stddev']
@@ -165,6 +187,7 @@ def main(config, name_exp):
         args_al['debug_acq'] = config.get('debug_acq', False)
         args_al['eier_num_workers'] = eier_num_workers
         args_al['z_chunk_size'] = int(config.get('z_chunk_size', 64))
+        args_al['n_mcs_eier_int'] = n_mcs_eier_int
         
     # Initialize the acquisition strategy
     strategy = AcquisitionStrategy(**args_al)
@@ -179,12 +202,19 @@ def main(config, name_exp):
     lml_prev = None        # LML of last good model
 
     start_time = time.time()
-    print(f'Experiment settings: {config} \n')
-    print(f'Reference Pf: {Pf_ref:.3E} \n')
+    print("Experiment settings:")
+    print(f"  config                : {config}")
+    print(f"  reference_Pf          : {_fmt_sci(Pf_ref)}")
+    print(f"  candidate_pool/iter   : {int(n_mcs_pool)}")
+    if al_strategy == "eier":
+        print(f"  eier_integration/iter : {int(n_mcs_eier_int)}")
+    print(
+        f"  posterior_pf_samples  : N_g={n_g_pf} | "
+        f"support={pf_post_pool_size} | "
+        f"batch={pf_post_batch_size}\n"
+    )
     # Active learning loop
     for it in range(iterations + 1):
-        
-        print(f'Training samples: {len(x_train_norm)} |', end=" ")
         wandb.log({"train_size": len(x_train_norm)}, step=it)
 
         # --- 1) Choose initialization kernel ---
@@ -232,6 +262,20 @@ def main(config, name_exp):
         kernel_prev = model_gp.kernel_
         lml_prev = lml
 
+        pf_post_rng = np.random.RandomState(int(random_state.randint(0, 2**31 - 1)))
+        gp_cache = build_gp_cache_from_gpr(model_gp)
+        _, pf_post_mean, pf_post_cov, pf_post_ci95 = estimate_pf_posterior_samples(
+            cache=gp_cache,
+            N_g=n_g_pf,
+            batch_size_acq=pf_post_batch_size,
+            rng=pf_post_rng,
+            n_pool_pf=pf_post_pool_size,
+            input_dim=lstate.input_dim,
+        )
+        pf_post_mean_evol.append(pf_post_mean)
+        pf_post_cov_evol.append(pf_post_cov)
+        pf_post_ci95_evol.append([pf_post_ci95[0], pf_post_ci95[1]])
+
         # Pf estimation with MCs
         x_mcs_pf = np.random.normal(0, 1, size=(int(n_mcs_pf), lstate.input_dim))
         mean_pf, _ = parallel_predict(
@@ -249,11 +293,35 @@ def main(config, name_exp):
         B_model = - norm.ppf(Pf_model)
         B_rel_diff = (B_model-B_ref)/B_ref
 
-        print(f'Pf_model: {Pf_model:.3E}, Pf_rel_diff: {Pf_rel_diff:.2E}, B_rel_diff: {B_rel_diff:.2E}, LML = {lml:.2E}')
-        wandb.log({"Pf_model":Pf_model, "Pf_rel_diff": Pf_rel_diff, "B_rel_diff": B_rel_diff, "LML": lml}, step=it)
+        print(f"Iteration {it:02d}")
+        print(f"  train_size            : {len(x_train_norm)}")
+        print(
+            f"  Pf_mean_predictor     : Pf={_fmt_sci(Pf_model)} | "
+            f"rel_diff={_fmt_sci(Pf_rel_diff)} | "
+            f"B_rel_diff={_fmt_sci(B_rel_diff)}"
+        )
+        print(
+            f"  Pf_posterior_samples  : mean={_fmt_sci(pf_post_mean)} | "
+            f"CoV={_fmt_sci(pf_post_cov)} | "
+            f"CI95=[{_fmt_sci(pf_post_ci95[0])}, {_fmt_sci(pf_post_ci95[1])}]"
+        )
+        wandb.log(
+            {
+                "Pf_model": Pf_model,
+                "Pf_rel_diff": Pf_rel_diff,
+                "B_rel_diff": B_rel_diff,
+                "LML": lml,
+                "Pf_post_mean": pf_post_mean,
+                "Pf_post_CoV": pf_post_cov,
+                "Pf_post_CI95_low": pf_post_ci95[0],
+                "Pf_post_CI95_high": pf_post_ci95[1],
+            },
+            step=it,
+        )
 
         # Making predictions of mean and std for mc population 
         x_mc_pool = np.random.normal(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
+        x_mc_pool = np.asarray(x_mc_pool, dtype=np.float64)
         mean_pred, std_pred = parallel_predict(
             model_gp,
             x_mc_pool,
@@ -317,9 +385,13 @@ def main(config, name_exp):
         selected_outputs = np.atleast_1d(np.asarray(selected_outputs, dtype=np.float64))
         x_train_norm = np.concatenate((x_train_norm, selected_samples_norm), axis=0)
         y_train = np.concatenate((y_train, selected_outputs), axis=0)
+        print("")
 
         # Saving results
         results_file['Pf_model'] = pf_evol
+        results_file['Pf_post_mean'] = pf_post_mean_evol
+        results_file['Pf_post_CoV'] = pf_post_cov_evol
+        results_file['Pf_post_CI95'] = pf_post_ci95_evol
 
         if it % save_interval == 0:
             with open(results_dir + 'output.json', 'w') as file_id:
@@ -331,6 +403,9 @@ def main(config, name_exp):
 
     # Saving final results
     results_file['Pf_model'] = pf_evol
+    results_file['Pf_post_mean'] = pf_post_mean_evol
+    results_file['Pf_post_CoV'] = pf_post_cov_evol
+    results_file['Pf_post_CI95'] = pf_post_ci95_evol
     results_file['lml'] = lml_evol
     results_file['Pareto_metrics'] = pareto_metrics
     results_file['training_samples'] = x_train_norm.tolist(), y_train.tolist()  # training samples
