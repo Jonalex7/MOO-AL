@@ -15,6 +15,12 @@ source ~/miniconda3/bin/activate
 conda activate py39_base
 source env/bin/activate
 
+CPU_LIMIT=${SLURM_CPUS_PER_TASK:-1}
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
 # Define arrays for the arguments
 # CASE_STUDY_OPTIONS=("four_branch_6" "four_branch_7" "himmelblau" "hat" "nonlinear_oscillator" "high_dimensional" "2dof_oscillator")
 CASE_STUDY_OPTIONS=("nonlinear_oscillator" "high_dimensional" "2dof_oscillator")
@@ -51,4 +57,9 @@ echo "Running with --case_study=$CASE_STUDY --al_strategy=$AL_STRATEGY --output=
 # Run the Python script with the selected arguments
 
 # OUTPUT_NAME="${OUTPUT_PREFIX}_${OUTPUT_NUMBER}"
-python main.py --config default_moor --case_study "$CASE_STUDY" --al_strategy "$AL_STRATEGY" --output "$OUTPUT_NUMBER"
+python main.py \
+    --config default_moor \
+    --case_study "$CASE_STUDY" \
+    --al_strategy "$AL_STRATEGY" \
+    --cpu_workers "$CPU_LIMIT" \
+    --output "$OUTPUT_NUMBER"

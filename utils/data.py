@@ -1,3 +1,5 @@
+import os
+import re
 from contextlib import nullcontext
 
 import numpy as np
@@ -54,10 +56,40 @@ def custom_optimizer(obj_func, initial_theta, bounds):
 def predict_batch(model, x_batch):
     return model.predict(x_batch, return_std=True)
 
+
+def _parse_positive_int(raw_value):
+    if raw_value is None:
+        return None
+    match = re.search(r"\d+", str(raw_value))
+    if match is None:
+        return None
+    value = int(match.group())
+    return value if value > 0 else None
+
+
+def _resolve_n_jobs(n_jobs, n_batches):
+    n_jobs = int(n_jobs)
+    if n_jobs == -1:
+        try:
+            affinity_count = len(os.sched_getaffinity(0))
+        except AttributeError:
+            affinity_count = os.cpu_count() or 1
+        n_jobs = max(1, int(affinity_count))
+    elif n_jobs < 1:
+        raise ValueError("`n_jobs` must be a positive integer or -1.")
+
+    slurm_cpus_per_task = _parse_positive_int(os.environ.get("SLURM_CPUS_PER_TASK"))
+    if slurm_cpus_per_task is not None:
+        n_jobs = min(n_jobs, slurm_cpus_per_task)
+
+    return max(1, min(int(n_jobs), int(n_batches)))
+
+
 def parallel_predict(model_gp, x_mc_pool, n_jobs=-1, batch_size=10000, prefer="threads"):
     x_mc_pool = np.asarray(x_mc_pool, dtype=np.float64)
     batch_size = max(1, int(batch_size))
     n_batches = int(np.ceil(x_mc_pool.shape[0] / batch_size))
+    n_jobs = _resolve_n_jobs(n_jobs, n_batches)
 
     # Split into batches
     batches = [x_mc_pool[i * batch_size: (i + 1) * batch_size] for i in range(n_batches)]
@@ -66,10 +98,19 @@ def parallel_predict(model_gp, x_mc_pool, n_jobs=-1, batch_size=10000, prefer="t
         results = [predict_batch(model_gp, batch) for batch in batches]
     else:
         limit_ctx = threadpool_limits(limits=1, user_api="blas") if threadpool_limits is not None else nullcontext()
-        with limit_ctx:
-            results = Parallel(n_jobs=n_jobs, prefer=prefer)(
-                delayed(predict_batch)(model_gp, batch) for batch in batches
+        try:
+            with limit_ctx:
+                results = Parallel(n_jobs=n_jobs, prefer=prefer)(
+                    delayed(predict_batch)(model_gp, batch) for batch in batches
+                )
+        except RuntimeError as exc:
+            if "can't start new thread" not in str(exc).lower():
+                raise
+            print(
+                f"[parallel_predict] Thread creation failed with n_jobs={n_jobs}; "
+                "falling back to sequential execution for this call."
             )
+            results = [predict_batch(model_gp, batch) for batch in batches]
 
     # Combining results
     means, stds = zip(*results)
