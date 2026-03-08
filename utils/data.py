@@ -67,6 +67,32 @@ def _parse_positive_int(raw_value):
     return value if value > 0 else None
 
 
+def resolve_cpu_workers(value):
+    value = int(value)
+
+    slurm_cpus_per_task = _parse_positive_int(os.environ.get("SLURM_CPUS_PER_TASK"))
+    try:
+        affinity_count = max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:
+        count = os.cpu_count()
+        affinity_count = 1 if count is None else max(1, int(count))
+
+    available_workers = affinity_count
+    if slurm_cpus_per_task is not None:
+        available_workers = min(available_workers, slurm_cpus_per_task)
+
+    if value == -1:
+        return int(available_workers)
+    if value < 1:
+        raise ValueError("`cpu_workers` must be a positive integer or -1.")
+    if value > available_workers:
+        print(
+            f"[cpu] Requested {value} workers but only {available_workers} are available "
+            "for this task. Capping worker count."
+        )
+    return int(min(value, available_workers))
+
+
 def _resolve_n_jobs(n_jobs, n_batches):
     n_jobs = int(n_jobs)
     if n_jobs == -1:

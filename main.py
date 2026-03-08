@@ -1,6 +1,5 @@
 import datetime
 import os
-import re
 import argparse
 import json
 import time
@@ -13,7 +12,7 @@ import wandb
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import AcquisitionStrategy
 from active_learning.eier import build_gp_cache_from_gpr, estimate_pf_posterior_samples
-from utils.data import isoprobabilistic_transform, normalize_array, parallel_predict
+from utils.data import isoprobabilistic_transform, normalize_array, parallel_predict, resolve_cpu_workers
 from utils.gp_training import (
     fit_gp_with_optional_stabilization,
     is_bad_fit,
@@ -31,38 +30,6 @@ def _fmt_sci(value):
     if np.isneginf(value):
         return "-inf"
     return f"{value:.3E}"
-
-
-def _resolve_cpu_workers(value):
-    value = int(value)
-    slurm_raw = os.environ.get("SLURM_CPUS_PER_TASK")
-    slurm_cpus_per_task = None
-    if slurm_raw is not None:
-        match = re.search(r"\d+", str(slurm_raw))
-        if match is not None:
-            parsed = int(match.group())
-            if parsed > 0:
-                slurm_cpus_per_task = parsed
-    try:
-        affinity_count = max(1, len(os.sched_getaffinity(0)))
-    except AttributeError:
-        count = os.cpu_count()
-        affinity_count = 1 if count is None else max(1, int(count))
-
-    available_workers = affinity_count
-    if slurm_cpus_per_task is not None:
-        available_workers = min(available_workers, slurm_cpus_per_task)
-
-    if value == -1:
-        return int(available_workers)
-    if value < 1:
-        raise ValueError("`cpu_workers` must be a positive integer or -1.")
-    if value > available_workers:
-        print(
-            f"[cpu] Requested {value} workers but only {available_workers} are available "
-            "for this task. Capping worker count."
-        )
-    return int(min(value, available_workers))
 
 
 def main(config, name_exp):
@@ -122,13 +89,13 @@ def main(config, name_exp):
     predict_batch_size = int(config.get('predict_batch_size', 10000))
     raw_cpu_workers = config.get('cpu_workers', None)
     if raw_cpu_workers is not None:
-        resolved_cpu_workers = _resolve_cpu_workers(raw_cpu_workers)
+        resolved_cpu_workers = resolve_cpu_workers(raw_cpu_workers)
         predict_n_jobs = resolved_cpu_workers
         eier_num_workers = resolved_cpu_workers
         config['cpu_workers'] = int(resolved_cpu_workers)
     else:
-        predict_n_jobs = _resolve_cpu_workers(config.get('predict_n_jobs', -1))
-        eier_num_workers = _resolve_cpu_workers(config.get('eier_num_workers', 1))
+        predict_n_jobs = resolve_cpu_workers(config.get('predict_n_jobs', -1))
+        eier_num_workers = resolve_cpu_workers(config.get('eier_num_workers', 1))
     eier_num_workers = max(1, int(eier_num_workers))
     config['n_g_pf'] = n_g_pf
     config['n_mcs_eier_int'] = n_mcs_eier_int
