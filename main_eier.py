@@ -18,11 +18,23 @@ from active_learning.eier import build_gp_cache_from_gpr, estimate_pf_posterior_
 from utils.data import isoprobabilistic_transform, custom_optimizer, normalize_array, parallel_predict
 
 
-def make_base_kernel(input_dim):
+def _fmt_sci(value):
+    value = float(value)
+    if np.isnan(value):
+        return "nan"
+    if np.isposinf(value):
+        return "inf"
+    if np.isneginf(value):
+        return "-inf"
+    return f"{value:.3E}"
+
+
+def make_base_kernel(input_dim, upper_bound=1e5):
+    upper_bound = float(upper_bound)
     length_init = np.full(input_dim, 1.0, dtype=np.float64)
-    kernel = ConstantKernel(1.0, (1e-5, 1e5)) * Matern(
+    kernel = ConstantKernel(1.0, (1e-5, upper_bound)) * Matern(
         length_scale=length_init,
-        length_scale_bounds=(1e-5, 1e5),
+        length_scale_bounds=(1e-5, upper_bound),
         nu=2.5,
     )
     return kernel
@@ -40,17 +52,6 @@ def is_bad_fit(current_lml, prev_lml, lml_drop_tol=50.0, abs_lml_low=-100.0):
     else:
         big_drop = current_lml < (prev_lml - lml_drop_tol)
     return too_low or big_drop
-
-
-def _fmt_sci(value):
-    value = float(value)
-    if np.isnan(value):
-        return "nan"
-    if np.isposinf(value):
-        return "inf"
-    if np.isneginf(value):
-        return "-inf"
-    return f"{value:.3E}"
 
 
 def _resolve_cpu_workers(value):
@@ -89,6 +90,62 @@ def _resolve_gp_alpha(config, y_train):
     y_scale = max(float(np.std(y_train)), 1e-12)
     alpha = float(config['obs_stddev'] / y_scale) ** 2
     return max(alpha, float(config.get('min_gp_alpha', 1e-12)))
+
+
+def _fit_gp_with_optional_stabilization(
+    x_train_norm,
+    y_train,
+    init_kernel,
+    input_dim,
+    gp_alpha,
+    n_restarts_optimizer,
+    enable_stabilization=False,
+    max_gp_alpha=1e-4,
+):
+    def _build_model(kernel, alpha):
+        return GaussianProcessRegressor(
+            kernel=kernel,
+            n_restarts_optimizer=n_restarts_optimizer,
+            normalize_y=True,
+            optimizer=custom_optimizer,
+            alpha=float(alpha),
+        )
+
+    model_gp = _build_model(init_kernel, gp_alpha)
+    try:
+        model_gp.fit(x_train_norm, y_train)
+        return model_gp, {
+            "stabilized": False,
+            "alpha_used": float(gp_alpha),
+            "retry_count": 0,
+            "kernel_upper": 1e5,
+        }
+    except np.linalg.LinAlgError:
+        if not enable_stabilization:
+            raise
+
+    retry_count = 0
+    gp_alpha_retry = max(float(gp_alpha), 1e-12)
+    while gp_alpha_retry <= float(max_gp_alpha) + 1e-18:
+        for kernel_upper in (1e5, 30.0):
+            retry_count += 1
+            retry_kernel = make_base_kernel(input_dim, upper_bound=kernel_upper)
+            retry_model = _build_model(retry_kernel, gp_alpha_retry)
+            try:
+                retry_model.fit(x_train_norm, y_train)
+                return retry_model, {
+                    "stabilized": True,
+                    "alpha_used": float(gp_alpha_retry),
+                    "retry_count": int(retry_count),
+                    "kernel_upper": float(kernel_upper),
+                }
+            except np.linalg.LinAlgError:
+                continue
+        gp_alpha_retry *= 10.0
+
+    raise np.linalg.LinAlgError(
+        "GP fit failed after stabilization retries (alpha backoff + tighter kernel bounds)."
+    )
 
 
 def main(config, name_exp):
@@ -250,34 +307,36 @@ def main(config, name_exp):
         if al_strategy == "eier":
             gp_alpha = _resolve_gp_alpha(config, y_train)
 
-        # Train the Gaussian Process model
-        model_gp = GaussianProcessRegressor(
-            kernel=init_kernel,
+        model_gp, gp_fit_info = _fit_gp_with_optional_stabilization(
+            x_train_norm=x_train_norm,
+            y_train=y_train,
+            init_kernel=init_kernel,
+            input_dim=lstate.input_dim,
+            gp_alpha=gp_alpha,
             n_restarts_optimizer=0,  # refine around warm-start
-            normalize_y=True,
-            optimizer=custom_optimizer,
-            alpha=gp_alpha
+            enable_stabilization=(al_strategy == "eier"),
         )
-        model_gp.fit(x_train_norm, y_train)
         lml = model_gp.log_marginal_likelihood_value_
 
         if is_bad_fit(lml, lml_prev, lml_drop_tol=50.0, abs_lml_low=-100.0):
             # This fit looks suspicious -> try a fresh base kernel with restarts
             base_kernel = make_base_kernel(lstate.input_dim)
-            model_gp_fresh = GaussianProcessRegressor(
-                kernel=base_kernel,
+            model_gp_fresh, gp_fit_info_fresh = _fit_gp_with_optional_stabilization(
+                x_train_norm=x_train_norm,
+                y_train=y_train,
+                init_kernel=base_kernel,
+                input_dim=lstate.input_dim,
+                gp_alpha=gp_alpha,
                 n_restarts_optimizer=9,  # full search from scratch
-                normalize_y=True,
-                optimizer=custom_optimizer,
-                alpha=gp_alpha
+                enable_stabilization=(al_strategy == "eier"),
             )
-            model_gp_fresh.fit(x_train_norm, y_train)
             lml_fresh = model_gp_fresh.log_marginal_likelihood_value_
 
             # Decide which one to keep: warm-start vs fresh
             if lml_fresh > lml:
                 model_gp = model_gp_fresh
                 lml = lml_fresh
+                gp_fit_info = gp_fit_info_fresh
 
         # Update "last good" kernel and LML for next iteration ---
         kernel_prev = model_gp.kernel_
@@ -325,20 +384,34 @@ def main(config, name_exp):
             f"CoV={_fmt_sci(pf_post_cov)} | "
             f"CI95=[{_fmt_sci(pf_post_ci95[0])}, {_fmt_sci(pf_post_ci95[1])}]"
         )
+        if al_strategy == "eier":
+            print(
+                f"  gp_stabilized         : {gp_fit_info['stabilized']} | "
+                f"alpha_used={_fmt_sci(gp_fit_info['alpha_used'])} | "
+                f"retries={gp_fit_info['retry_count']} | "
+                f"kernel_upper={_fmt_sci(gp_fit_info['kernel_upper'])}"
+            )
         # print(f"  log_marg_like         : {_fmt_sci(lml)}")
-        wandb.log(
-            {
-                "Pf_model": Pf_model,
-                "Pf_rel_diff": Pf_rel_diff,
-                "B_rel_diff": B_rel_diff,
-                "LML": lml,
-                "Pf_post_mean": pf_post_mean,
-                "Pf_post_CoV": pf_post_cov,
-                "Pf_post_CI95_low": pf_post_ci95[0],
-                "Pf_post_CI95_high": pf_post_ci95[1],
-            },
-            step=it,
-        )
+        metrics_payload = {
+            "Pf_model": Pf_model,
+            "Pf_rel_diff": Pf_rel_diff,
+            "B_rel_diff": B_rel_diff,
+            "LML": lml,
+            "Pf_post_mean": pf_post_mean,
+            "Pf_post_CoV": pf_post_cov,
+            "Pf_post_CI95_low": pf_post_ci95[0],
+            "Pf_post_CI95_high": pf_post_ci95[1],
+        }
+        if al_strategy == "eier":
+            metrics_payload.update(
+                {
+                    "gp_stabilized": int(bool(gp_fit_info["stabilized"])),
+                    "gp_alpha_used": float(gp_fit_info["alpha_used"]),
+                    "gp_retry_count": int(gp_fit_info["retry_count"]),
+                    "gp_kernel_upper": float(gp_fit_info["kernel_upper"]),
+                }
+            )
+        wandb.log(metrics_payload, step=it)
 
         if len(selected_pool_indices) >= x_mc_pool_fixed.shape[0]:
             print("  status                : candidate pool exhausted\n")
