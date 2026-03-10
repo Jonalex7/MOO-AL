@@ -1,43 +1,24 @@
 import datetime
 import os
-import re
 import argparse
 import json
 import time
 
 import numpy as np
 import yaml
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import Matern, ConstantKernel
 from scipy.stats import norm
 import wandb
 
 from limit_states import REGISTRY as ls_REGISTRY
 from active_learning.active_learning import AcquisitionStrategy
 from active_learning.eier import build_gp_cache_from_gpr, estimate_pf_posterior_samples
-from utils.data import isoprobabilistic_transform, custom_optimizer, normalize_array, parallel_predict
-
-def make_base_kernel(input_dim):
-    length_init = np.full(input_dim, 1.0, dtype=np.float64)
-    kernel = ConstantKernel(1.0, (1e-5, 1e5)) * Matern(
-        length_scale=length_init,
-        length_scale_bounds=(1e-5, 1e5),
-        nu=2.5,
-    )
-    return kernel
-
-def is_bad_fit(current_lml, prev_lml, lml_drop_tol=50.0, abs_lml_low=-100.0):
-    """
-    Consider a fit 'bad' if:
-      - LML drops a lot compared to the previous good model, OR
-      - LML is absolutely very low.
-    """
-    too_low = current_lml < abs_lml_low
-    if prev_lml is None:
-        big_drop = False
-    else:
-        big_drop = current_lml < (prev_lml - lml_drop_tol)
-    return too_low or big_drop
+from utils.data import isoprobabilistic_transform, normalize_array, parallel_predict, resolve_cpu_workers
+from utils.gp_training import (
+    fit_gp_with_optional_stabilization,
+    is_bad_fit,
+    make_base_kernel,
+    resolve_gp_alpha,
+)
 
 
 def _fmt_sci(value):
@@ -49,44 +30,6 @@ def _fmt_sci(value):
     if np.isneginf(value):
         return "-inf"
     return f"{value:.3E}"
-
-
-def _resolve_cpu_workers(value):
-    value = int(value)
-    slurm_raw = os.environ.get("SLURM_CPUS_PER_TASK")
-    slurm_cpus_per_task = None
-    if slurm_raw is not None:
-        match = re.search(r"\d+", str(slurm_raw))
-        if match is not None:
-            parsed = int(match.group())
-            if parsed > 0:
-                slurm_cpus_per_task = parsed
-    try:
-        affinity_count = max(1, len(os.sched_getaffinity(0)))
-    except AttributeError:
-        count = os.cpu_count()
-        affinity_count = 1 if count is None else max(1, int(count))
-
-    available_workers = affinity_count
-    if slurm_cpus_per_task is not None:
-        available_workers = min(available_workers, slurm_cpus_per_task)
-
-    if value == -1:
-        return int(available_workers)
-    if value < 1:
-        raise ValueError("`cpu_workers` must be a positive integer or -1.")
-    if value > available_workers:
-        print(
-            f"[cpu] Requested {value} workers but only {available_workers} are available "
-            "for this task. Capping worker count."
-        )
-    return int(min(value, available_workers))
-
-
-def _resolve_gp_alpha(config, y_train):
-    y_scale = max(float(np.std(y_train)), 1e-12)
-    alpha = float(config['obs_stddev'] / y_scale) ** 2
-    return max(alpha, float(config.get('min_gp_alpha', 1e-12)))
 
 
 def main(config, name_exp):
@@ -149,13 +92,13 @@ def main(config, name_exp):
     predict_batch_size = int(config.get('predict_batch_size', 10000))
     raw_cpu_workers = config.get('cpu_workers', None)
     if raw_cpu_workers is not None:
-        resolved_cpu_workers = _resolve_cpu_workers(raw_cpu_workers)
+        resolved_cpu_workers = resolve_cpu_workers(raw_cpu_workers)
         predict_n_jobs = resolved_cpu_workers
         eier_num_workers = resolved_cpu_workers
         config['cpu_workers'] = int(resolved_cpu_workers)
     else:
-        predict_n_jobs = _resolve_cpu_workers(config.get('predict_n_jobs', -1))
-        eier_num_workers = _resolve_cpu_workers(config.get('eier_num_workers', 1))
+        predict_n_jobs = resolve_cpu_workers(config.get('predict_n_jobs', -1))
+        eier_num_workers = resolve_cpu_workers(config.get('eier_num_workers', 1))
     eier_num_workers = max(1, int(eier_num_workers))
     config['n_g_pf'] = n_g_pf
     config['n_mcs_eier_int'] = n_mcs_eier_int
@@ -248,36 +191,38 @@ def main(config, name_exp):
 
         gp_alpha = 1e-8
         if al_strategy == "eier":
-            gp_alpha = _resolve_gp_alpha(config, y_train)
+            gp_alpha = resolve_gp_alpha(config, y_train)
 
-        # Train the Gaussian Process model
-        model_gp = GaussianProcessRegressor(
-            kernel=init_kernel,
-            n_restarts_optimizer=0,      # refine around warm-start
-            normalize_y=True,
-            optimizer=custom_optimizer,
-            alpha=gp_alpha
+        model_gp, gp_fit_info = fit_gp_with_optional_stabilization(
+            x_train_norm=x_train_norm,
+            y_train=y_train,
+            init_kernel=init_kernel,
+            input_dim=lstate.input_dim,
+            gp_alpha=gp_alpha,
+            n_restarts_optimizer=0,  # refine around warm-start
+            enable_stabilization=(al_strategy == "eier"),
         )
-        model_gp.fit(x_train_norm, y_train)
         lml = model_gp.log_marginal_likelihood_value_
         
         if is_bad_fit(lml, lml_prev, lml_drop_tol=50.0, abs_lml_low=-100.0):
             # This fit looks suspicious -> try a fresh base kernel with restarts
             base_kernel = make_base_kernel(lstate.input_dim)
-            model_gp_fresh = GaussianProcessRegressor(
-                kernel=base_kernel,
-                n_restarts_optimizer=9,   # full search from scratch
-                normalize_y=True,
-                optimizer=custom_optimizer,
-                alpha=gp_alpha
+            model_gp_fresh, gp_fit_info_fresh = fit_gp_with_optional_stabilization(
+                x_train_norm=x_train_norm,
+                y_train=y_train,
+                init_kernel=base_kernel,
+                input_dim=lstate.input_dim,
+                gp_alpha=gp_alpha,
+                n_restarts_optimizer=9,  # full search from scratch
+                enable_stabilization=(al_strategy == "eier"),
             )
-            model_gp_fresh.fit(x_train_norm, y_train)
             lml_fresh = model_gp_fresh.log_marginal_likelihood_value_
 
             # Decide which one to keep: warm-start vs fresh
             if lml_fresh > lml:
                 model_gp = model_gp_fresh
                 lml = lml_fresh
+                gp_fit_info = gp_fit_info_fresh
 
         # Update "last good" kernel and LML for next iteration ---
         kernel_prev = model_gp.kernel_
@@ -326,19 +271,33 @@ def main(config, name_exp):
             f"CoV={_fmt_sci(pf_post_cov)} | "
             f"CI95=[{_fmt_sci(pf_post_ci95[0])}, {_fmt_sci(pf_post_ci95[1])}]"
         )
-        wandb.log(
-            {
-                "Pf_model": Pf_model,
-                "Pf_rel_diff": Pf_rel_diff,
-                "B_rel_diff": B_rel_diff,
-                "LML": lml,
-                "Pf_post_mean": pf_post_mean,
-                "Pf_post_CoV": pf_post_cov,
-                "Pf_post_CI95_low": pf_post_ci95[0],
-                "Pf_post_CI95_high": pf_post_ci95[1],
-            },
-            step=it,
-        )
+        if al_strategy == "eier":
+            print(
+                f"  gp_stabilized         : {gp_fit_info['stabilized']} | "
+                f"alpha_used={_fmt_sci(gp_fit_info['alpha_used'])} | "
+                f"retries={gp_fit_info['retry_count']} | "
+                f"kernel_upper={_fmt_sci(gp_fit_info['kernel_upper'])}"
+            )
+        metrics_payload = {
+            "Pf_model": Pf_model,
+            "Pf_rel_diff": Pf_rel_diff,
+            "B_rel_diff": B_rel_diff,
+            "LML": lml,
+            "Pf_post_mean": pf_post_mean,
+            "Pf_post_CoV": pf_post_cov,
+            "Pf_post_CI95_low": pf_post_ci95[0],
+            "Pf_post_CI95_high": pf_post_ci95[1],
+        }
+        if al_strategy == "eier":
+            metrics_payload.update(
+                {
+                    "gp_stabilized": int(bool(gp_fit_info["stabilized"])),
+                    "gp_alpha_used": float(gp_fit_info["alpha_used"]),
+                    "gp_retry_count": int(gp_fit_info["retry_count"]),
+                    "gp_kernel_upper": float(gp_fit_info["kernel_upper"]),
+                }
+            )
+        wandb.log(metrics_payload, step=it)
 
         # Making predictions of mean and std for mc population 
         x_mc_pool = np.random.normal(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
