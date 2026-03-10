@@ -109,11 +109,14 @@ def main(config, name_exp):
     B_ref = - norm.ppf(Pf_ref)
 
     # results directory
+    # New layout: results/<case_study>/<method>/<run_folder>/
     date_time_stamp = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     if al_strategy == 'moo':
-        results_dir = f'results/{casestudy}/{al_strategy}_{config["moo_method"]}_{al_batch}_{name_exp}_{date_time_stamp}/'
+        method_name = f'{al_strategy}_{config["moo_method"]}'
     else:
-        results_dir = f'results/{casestudy}/{al_strategy}_{al_batch}_{name_exp}_{date_time_stamp}/'
+        method_name = al_strategy
+    run_folder = f'{al_batch}_{name_exp}_{date_time_stamp}'
+    results_dir = f'results/{casestudy}/{method_name}/{run_folder}/'
 
     # store_model_dir = results_dir + 'model/'
 
