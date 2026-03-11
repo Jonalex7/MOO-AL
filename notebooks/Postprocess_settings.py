@@ -22,6 +22,16 @@ CASE_TITLES = {
     "high_dimensional": "High-dimensional",
 }
 
+REAL_PF_VALUES = {
+    "four_branch_6": 0.004458488011732697,
+    "four_branch_7": 0.0022232679883018138,
+    "hat": 0.00038667799963150175,
+    "himmelblau": 1.65e-4,
+    "nonlinear_oscillator": 0.0286178,
+    "2dof_oscillator": 0.0047598,
+    "high_dimensional": 0.0019820,
+}
+
 
 DEFAULT_STRATEGIES = [
     "moo_reliability",
@@ -38,9 +48,9 @@ DEFAULT_STRATEGIES = [
 ]
 
 
-STRATEGY_DIR_MAP = {
-    "moo_eps_ew": "moo_eps_lw",
-}
+# Keep empty unless a strategy folder name differs from its strategy key.
+# Current results_tracking uses canonical names (e.g., moo_eps_ew folder).
+STRATEGY_DIR_MAP = {}
 
 
 STRATEGY_LABELS = {
@@ -63,7 +73,7 @@ STRATEGY_COLORS = {
     "moo_knee": "#ff7f0e",
     "moo_compromise": "#2ca02c",
     "moo_eps_ew": "#8c564b",
-    "eier": "#000000",
+    "eier": "#111111",
     "eff": "#d62728",
     "u": "#9467bd",
     "erf": "#17becf",
@@ -74,7 +84,7 @@ STRATEGY_COLORS = {
 
 
 DOE_SAMPLES = 10
-MAX_LEN_BY_CASE = {case: (200 if case in GROUP_2D else 500) for case in CASE_STUDIES}
+MAX_LEN_BY_CASE = {case: (202 if case in GROUP_2D else 502) for case in CASE_STUDIES}
 
 
 def strategy_to_dir(strategy: str) -> str:
@@ -87,4 +97,3 @@ def strategy_label(strategy: str) -> str:
 
 def case_title(case: str) -> str:
     return CASE_TITLES.get(case, case)
-

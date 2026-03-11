@@ -4,16 +4,16 @@ import pickle
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 from scipy.ndimage import gaussian_filter1d
 
-from postprocess_settings import (
+from Postprocess_settings import (
     AGGREGATED_DIR,
     CASE_STUDIES,
     GROUP_2D,
     GROUP_HD,
     CASE_TITLES,
     STRATEGY_COLORS,
-    DEFAULT_STRATEGIES,
     strategy_label,
 )
 
@@ -64,7 +64,7 @@ casestudy = [case for case in CASE_STUDIES if case in relative_error_dict]
 custom_titles = [CASE_TITLES.get(case, case) for case in casestudy]
 strategy_colors = dict(STRATEGY_COLORS)
 font_size = 8
-linewidth = 0.8
+linewidth = 0.6
 cm = 1 / 2.54
 sigma = 1.5
 doe = 10
@@ -87,14 +87,7 @@ custom_legend = [strategy_label(s) for s in _strategy_display_order]
 
 print(f"[load] relative_error_dict from: {rel_path}")
 print(f"[load] config_results_dict  from: {cfg_path}")
-for case in casestudy:
-    print(f"[case] {case}")
-    for strategy in DEFAULT_STRATEGIES:
-        n_runs = len(relative_error_dict.get(case, {}).get(strategy, {}))
-        if n_runs == 0:
-            print(f"  No directory found for {case}, {strategy}")
-        else:
-            print(f"  [strategy] {strategy} | runs={n_runs}")
+print(f"[load] cases available: {len(casestudy)}")
 
 # ---------------------------------------------------------------------------
 # Figure controls (inputs)
@@ -163,7 +156,7 @@ captured_ls = 5         # number of best strategies to capture (top-k)
 threshold_factor = 1.0   # scale threshold up (>1) or down (<1). Set threshold_factor = 1.2 if you want the threshold to be 20% looser than that 3rd-minimum.
 required_consecutive = 3  # consecutive iterations below threshold for ranking/efficiency
 eier_reference_strategy = "eier"
-eier_reference_marker = "D"
+eier_reference_marker = "."
 excluded_from_threshold = {eier_reference_strategy}
 excluded_from_f03 = {eier_reference_strategy}
 debug_case_for_print = None  # e.g., "four_branch_7"
@@ -461,16 +454,6 @@ finalize_figure(fig, "F01")
 # ---------------------------------------------------------------------------
 # Figure F02: Pf evolution (two-row grouped layout)
 # ---------------------------------------------------------------------------
-# import numpy as np
-# import matplotlib.pyplot as plt
-# from scipy.ndimage import gaussian_filter1d
-
-# # --- Configuration & Styling ---
-# font_size = 8
-# linewidth = 0.8
-# cm = 1/2.54 
-# doe = 10 
-# sigma = 1.5  # Gaussian smoothing sigma
 epsilon_color = '#4d4d4d'
 
 plt.rcParams.update({
@@ -492,7 +475,6 @@ fig, axs = plt.subplots(
     2, len(remaining_cases),
     figsize=(17.5*cm, 10*cm), 
     sharey=True, sharex=False,
-    # layout='constrained'
 )
 
 for col_idx, case in enumerate(remaining_cases):
@@ -580,7 +562,7 @@ for col_idx, case in enumerate(remaining_cases):
             p97_5_s = gaussian_filter1d(p97_5_raw, sigma=sigma)
 
             steps = np.arange(doe, doe + max_len)
-            ax.plot(steps, median_s, color=strategy_colors[strategy], linewidth=linewidth, zorder=2)
+            ax.plot(steps, median_s, color=strategy_colors[strategy], linewidth=linewidth, zorder=2, alpha=0.9)
             ax.fill_between(steps, p2_5_s, p97_5_s, color=strategy_colors[strategy], alpha=0.1, zorder=1)
 
         # EIER as a common reference curve in both rows.
@@ -589,16 +571,19 @@ for col_idx, case in enumerate(remaining_cases):
                 eier_steps,
                 eier_median_s,
                 color=strategy_colors[eier_reference_strategy],
-                linewidth=linewidth + 0.1,
+                linewidth=linewidth,
                 marker=eier_reference_marker,
-                markersize=2.3,
+                markersize=3.0,
                 markevery=max(1, len(eier_steps) // 10),
-                zorder=9,
+                markerfacecolor='white',
+                markeredgewidth=0.6,
+                zorder=20,
+                alpha=0.9,
             )
 
         # Plot Min-Max Mean Reference Lines ON TOP (Higher zorder)
-        ax.plot(ref_steps, global_min_mean, color='black', dashes=(3, 3), linewidth=0.7, alpha=0.8, zorder=10)
-        ax.plot(ref_steps, global_max_mean, color='black', dashes=(3, 3), linewidth=0.7, alpha=0.8, zorder=10)
+        ax.plot(ref_steps, global_min_mean, color='black', dashes=(3, 3), linewidth=linewidth-0.1, alpha=0.8, zorder=10)
+        ax.plot(ref_steps, global_max_mean, color='black', dashes=(3, 3), linewidth=linewidth-0.1, alpha=0.8, zorder=10)
 
         # 3. FORMATTING
         if row_idx == 0: ax.set_title(f"{custom_titles[col_idx]}", fontsize=font_size)
@@ -642,14 +627,16 @@ h3.append(
         markersize=4,
         lw=linewidth + 0.1,
         label=strategy_label(eier_reference_strategy),
+        markerfacecolor='white',
+        markeredgewidth=0.8
     )
 )
 
 # Standardize spacing for visual balance
 common_params = {'loc': "lower center", 'fontsize': font_size, 'frameon': True, 'handlelength': 1.0}
 fig.legend(handles=h1, ncol=len(h1), bbox_to_anchor=(0.5, 0.499), columnspacing=0.8, **common_params)
-fig.legend(handles=h2, ncol=len(h2), bbox_to_anchor=(0.5, 0.048), columnspacing=0.9, **common_params)
-fig.legend(handles=h3, ncol=len(h3), bbox_to_anchor=(0.83, 0.048), columnspacing=0.9, **common_params)
+fig.legend(handles=h2, ncol=len(h2), bbox_to_anchor=(0.4, 0.047), columnspacing=0.9, **common_params)
+fig.legend(handles=h3, ncol=len(h3), bbox_to_anchor=(0.78, 0.047), columnspacing=0.9, **common_params)
 
 for ax in axs.flat:
     ax.tick_params(width=0.3, which='minor')
@@ -658,7 +645,7 @@ for ax in axs.flat:
         spine.set_linewidth(0.3)
       
 plt.subplots_adjust(
-    left=0.07, 
+    left=0.08, 
     right=0.95, 
     top=0.95, 
     bottom=0.20, # Increases space at the very bottom
@@ -958,6 +945,7 @@ class HandlerVerticalLine(HandlerLine2D):
         line.set_transform(trans)
         return [line]
 
+
 # ---------------------------------------------------------------------------
 # Figure F04: Distribution of required samples to hit threshold
 # ---------------------------------------------------------------------------
@@ -1032,8 +1020,37 @@ for i, case in enumerate(remaining_cases):
         z_ord = 5 if is_moo else 2
 
         # Plot Horizontal IQR Line
-        ax.hlines(y=idx, xmin=p25, xmax=p75, 
-                  color=color, linestyle='-', linewidth=1.0, alpha=st_alpha, zorder=z_ord)
+        if strategy == eier_reference_strategy:
+            # Use Line2D for EIER so plot caps match the legend rendering.
+            eier_line, = ax.plot(
+                [p25, p75],
+                [idx, idx],
+                color='white',
+                linestyle='-',
+                linewidth=0.4,
+                alpha=st_alpha,
+                zorder=z_ord,
+            )
+            eier_line.set_solid_capstyle('butt')
+            eier_line.set_path_effects(
+                [
+                    pe.Stroke(
+                        linewidth=1.2, foreground='black', capstyle='projecting', joinstyle='miter'
+                    ),
+                    pe.Normal(),
+                ]
+            )
+        else:
+            ax.hlines(
+                y=idx,
+                xmin=p25,
+                xmax=p75,
+                color=color,
+                linestyle='-',
+                linewidth=1.0,
+                alpha=st_alpha,
+                zorder=z_ord,
+            )
         
         # Vertical Line: MEAN (Solid)
         ax.vlines(x=mean_val, ymin=idx-0.32, ymax=idx+0.32, 
@@ -1059,21 +1076,35 @@ for i, case in enumerate(remaining_cases):
 handles = []
 handles2 = []
 for strat_key in strategies_order:
+    if strat_key == eier_reference_strategy:
+        continue
     label = custom_legend[strategies_order.index(strat_key)]
     handles.append(plt.Line2D([0], [0], color=strategy_colors[strat_key], lw=2, label=label))
 
 # Define Mean and Median handles specifically to map them to the handler
 mean_handle = plt.Line2D([0], [0], color='black', linestyle='-', lw=1.0, label='Mean')
 median_handle = plt.Line2D([0], [0], color='black', linestyle='--', lw=0.6, label='Median')
+eier_handle = plt.Line2D(
+    [0, 1],
+    [0, 0],
+    color='white',
+    linestyle='-',
+    linewidth=0.4,
+    label='EIER',
+)
+eier_handle.set_solid_capstyle('butt')
+eier_handle.set_path_effects(
+    [pe.Stroke(linewidth=1.2, foreground='black', capstyle='projecting', joinstyle='miter'), pe.Normal()]
+)
 iqr_patch = plt.Line2D(
     [0],
     [0],
     color='black',
     linestyle='-',
     linewidth=1.5,
-    label='2.5th - 97.5th Percentile',
+    label='2.5th-97.5th percentile',
 )
-handles2.extend([iqr_patch, mean_handle, median_handle])
+handles2.extend([eier_handle, iqr_patch, mean_handle, median_handle])
 
 # fig.legend(handles=handles, loc="lower center", ncol=6, fontsize=font_size, 
 #            bbox_to_anchor=(0.5, 0.03), columnspacing=0.8, handlelength=1.5)
@@ -1082,13 +1113,14 @@ fig.legend(
     loc="lower center", 
     ncol=5, 
     fontsize=font_size, 
-    bbox_to_anchor=(0.31, 0.03), 
+    bbox_to_anchor=(0.28, 0.03), 
     columnspacing=0.8, 
     handlelength=1.0, # Reduced to make vertical lines look centered
 )
 
 # fig.legend(handles=h1, ncol=len(h1), bbox_to_anchor=(0.5, 0.499), columnspacing=0.8, **common_params)
-fig.legend(handles=handles2, ncol=len(handles2), bbox_to_anchor=(0.75, 0.055), columnspacing=0.9, **common_params,
+fig.legend(handles=handles2, ncol=len(handles2), bbox_to_anchor=(0.736, 0.055), columnspacing=0.9, **common_params,
+               numpoints=2,
                handler_map={mean_handle: HandlerVerticalLine(), 
                  median_handle: HandlerVerticalLine()})
 
@@ -1180,9 +1212,7 @@ print(final_df_sorted.to_string())
 # Figure F05: Pf evolution (high-dimensional case)
 # ---------------------------------------------------------------------------
 # --- Setup Target ---
-# Assuming 'casestudy' is your list of 7 case keys
-target_case = casestudy[-1] 
-target_title = custom_titles[-1]
+target_case = casestudy[-1]
 
 # --- Plot Config ---
 plt.rcParams.update({
@@ -1197,16 +1227,21 @@ plt.rcParams.update({
     'mathtext.fontset': 'stix',
 })
 
-fig, ax = plt.subplots(figsize=(8.75*cm, 7.6*cm)) # Adjusted for a single plot square-ish aspect
+fig, ax = plt.subplots(figsize=(8.75*cm, 7.6*cm))
 epsilon_color = '#4d4d4d'
-case_max_len = 500 # Specific for High-dimensional
-all_means_in_case = []
+case_max_len = 500
+hd_pointwise_strats = [s for s in strategies_order if s != eier_reference_strategy]
+hd_all_strats = hd_pointwise_strats + [eier_reference_strategy]
+
+all_medians_in_case = []
+eier_steps = None
+eier_median_s = None
 
 # --- 1. Data Processing & Plotting Strategies ---
-for strategy in strategies_order:
+for strategy in hd_all_strats:
     if strategy not in relative_error_dict.get(target_case, {}):
         continue
-    
+
     exp_data = relative_error_dict[target_case][strategy]
     if not exp_data:
         continue
@@ -1215,54 +1250,100 @@ for strategy in strategies_order:
     max_len_available = max(len(diff) for diff in relative_diffs_all_exp)
     max_len = min(max_len_available, case_max_len)
 
-    n_runs = len(relative_diffs_all_exp)
-    rel_diff_mat = np.full((n_runs, max_len), np.nan, dtype=float)
-
+    rel_diff_mat = np.full((len(relative_diffs_all_exp), max_len), np.nan, dtype=float)
     for r, diff in enumerate(relative_diffs_all_exp):
         this_len = min(len(diff), max_len)
         rel_diff_mat[r, :this_len] = diff[:this_len]
 
-    # Stats
-    p2_5  = np.nanpercentile(rel_diff_mat, 2.5, axis=0)
-    p50   = np.nanpercentile(rel_diff_mat, 50.0, axis=0)
+    p2_5 = np.nanpercentile(rel_diff_mat, 2.5, axis=0)
+    p50 = np.nanpercentile(rel_diff_mat, 50.0, axis=0)
     p97_5 = np.nanpercentile(rel_diff_mat, 97.5, axis=0)
 
-    # Smoothing
-    p50_smooth = gaussian_filter1d(p50, sigma=sigma)
-    all_means_in_case.append(p50_smooth) # Store for min/max reference
+    p2_5_s = gaussian_filter1d(p2_5, sigma=sigma)
+    p50_s = gaussian_filter1d(p50, sigma=sigma)
+    p97_5_s = gaussian_filter1d(p97_5, sigma=sigma)
+    all_medians_in_case.append(p50_s)
 
     steps = np.arange(doe, doe + max_len)
-    pretty_label = custom_legend[strategies_order.index(strategy)]
+    if strategy == eier_reference_strategy:
+        eier_steps = steps
+        eier_median_s = p50_s
+        continue
 
-    # Main Strategy Plot
-    ax.plot(steps, p50_smooth, label=pretty_label, 
-            color=strategy_colors[strategy], linewidth=linewidth, zorder=5)
-    ax.fill_between(steps, gaussian_filter1d(p2_5, sigma=sigma), 
-                    gaussian_filter1d(p97_5, sigma=sigma),
-                    color=strategy_colors[strategy], alpha=0.1, zorder=4)
+    ax.plot(
+        steps,
+        p50_s,
+        color=strategy_colors[strategy],
+        linewidth=linewidth,
+        zorder=5,
+        alpha=0.9,
+    )
+    ax.fill_between(
+        steps,
+        p2_5_s,
+        p97_5_s,
+        color=strategy_colors[strategy],
+        alpha=0.1,
+        zorder=4,
+    )
+
+# EIER as reference curve (same visual language as Figure F02)
+if eier_steps is not None and eier_median_s is not None:
+    ax.plot(
+        eier_steps,
+        eier_median_s,
+        color=strategy_colors[eier_reference_strategy],
+        linewidth=linewidth,
+        marker=eier_reference_marker,
+        markersize=4.0,
+        markevery=max(1, len(eier_steps) // 10),
+        markerfacecolor='white',
+        markeredgewidth=0.6,
+        zorder=20,
+        alpha=0.9,
+    )
 
 # --- 2. Calculate and Plot Global Min-Max Reference ---
-if all_means_in_case:
-    max_steps_case = max(len(m) for m in all_means_in_case)
-    comp_mat = np.full((len(all_means_in_case), max_steps_case), np.nan)
-    for i, m in enumerate(all_means_in_case):
+if all_medians_in_case:
+    max_steps_case = max(len(m) for m in all_medians_in_case)
+    comp_mat = np.full((len(all_medians_in_case), max_steps_case), np.nan)
+    for i, m in enumerate(all_medians_in_case):
         comp_mat[i, :len(m)] = m
-    
+
     global_min_mean = np.nanmin(comp_mat, axis=0)
     global_max_mean = np.nanmax(comp_mat, axis=0)
     ref_steps = np.arange(doe, doe + max_steps_case)
 
-    # Plot Min-Max Mean Reference Lines
-    ax.plot(ref_steps, global_min_mean, color='black', dashes=(3, 3), 
-            linewidth=0.7, alpha=0.8, zorder=10, label='Min/Max Ensemble')
-    ax.plot(ref_steps, global_max_mean, color='black', dashes=(3, 3), 
-            linewidth=0.7, alpha=0.8, zorder=10)
+    ax.plot(
+        ref_steps,
+        global_min_mean,
+        color='black',
+        dashes=(3, 3),
+        linewidth=linewidth,
+        alpha=0.8,
+        zorder=10,
+    )
+    ax.plot(
+        ref_steps,
+        global_max_mean,
+        color='black',
+        dashes=(3, 3),
+        linewidth=linewidth,
+        alpha=0.8,
+        zorder=10,
+    )
 
-# --- 3. Threshold Lines & Formatting ---
-for eps in target_epsilon[target_case]:
-    ax.axhline(y=eps, color=epsilon_color, linestyle='--', linewidth=0.5, alpha=0.8, zorder=2)
+# --- 3. Threshold and Formatting ---
+strictest_eps = min(target_epsilon[target_case])
+ax.axhline(
+    y=strictest_eps,
+    color=epsilon_color,
+    linestyle=':',
+    linewidth=0.8,
+    alpha=0.7,
+    zorder=2,
+)
 
-# ax.set_title(target_title)
 ax.set_ylabel(r"$\delta P_\mathrm{F}$")
 ax.set_xlabel("Number of acquired samples")
 ax.set_yscale('log')
@@ -1271,104 +1352,89 @@ ax.set_xlim(doe, case_max_len)
 ax.set_xticks([10, 100, 200, 300, 400, 500])
 ax.grid(True, which="both", linewidth=0.01, alpha=0.3)
 
-# --- 4. Custom Legend Outside ---
-handles = []
-# Strategy handles
-for strat_key, label in zip(strategies_order, custom_legend):
-    handles.append(plt.Line2D([0], [0], color=strategy_colors[strat_key], 
-                              marker='s', markersize=4, linestyle='', label=label))
+# --- 4. Legends (point-wise + reference handles) ---
+handles_pointwise = []
+for strat_key in hd_pointwise_strats:
+    handles_pointwise.append(
+        plt.Line2D(
+            [0],
+            [0],
+            color=strategy_colors[strat_key],
+            marker='s',
+            markersize=4,
+            linestyle='',
+            label=strategy_label(strat_key),
+        )
+    )
 
-# Add reference line handles
-handles.append(plt.Line2D([0], [0], color=epsilon_color, linestyle='--', linewidth=0.5, label=r"$\delta P_{\mathrm{F,target}}$"))
-handles.append(plt.Line2D([0], [0], color='black', dashes=(3, 3), linewidth=0.7, label="min-max medians"))
-
-fig.legend(
-    handles=handles,
-    loc="upper center",
-    ncol=3,                 # 3 columns fits a single plot width well
-    fontsize=font_size,
-    columnspacing=1.0,
-    handletextpad=0.5,
-    bbox_to_anchor=(0.55, 0.27) # Positioned below the X-axis
+handles_ref = []
+handles_ref.append(
+    plt.Line2D(
+        [0],
+        [0],
+        color=epsilon_color,
+        ls=':',
+        lw=0.8,
+        label=r'$\delta P_{\mathrm{F,target}}$',
+    )
+)
+handles_ref.append(
+    plt.Line2D(
+        [0],
+        [0],
+        color='black',
+        ls='--',
+        lw=0.8,
+        label='min-max medians',
+    )
+)
+handles_ref.append(
+    plt.Line2D(
+        [0],
+        [0],
+        color=strategy_colors[eier_reference_strategy],
+        marker=eier_reference_marker,
+        markersize=4,
+        lw=linewidth + 0.1,
+        label=strategy_label(eier_reference_strategy),
+        markerfacecolor='white',
+        markeredgewidth=0.8,
+    )
 )
 
-# plt.subplots_adjust(bottom=0.35) # Make room for the legend
+common_params_hd = {'loc': "lower center", 'fontsize': font_size, 'frameon': True, 'handlelength': 1.0}
+fig.legend(handles=handles_pointwise, ncol=5, bbox_to_anchor=(0.53, 0.00), columnspacing=0.6, **common_params_hd)
+fig.legend(handles=handles_ref, ncol=3, bbox_to_anchor=(0.52, 0.125), columnspacing=0.8, **common_params_hd)
+
 plt.subplots_adjust(
-    left=0.15, 
-    right=0.96, 
-    top=0.95, 
-    bottom=0.4, # Increases space at the very bottom
-    hspace=0.51, # Increases space between row 1 and row 2
-    wspace=0.25
+    left=0.15,
+    right=0.96,
+    top=0.95,
+    bottom=0.34,
+    hspace=0.51,
+    wspace=0.25,
 )
 
 finalize_figure(fig, "F05")
-
-# Select snapshots (sample counts) to analyze
-snapshots = list(np.arange(10, 500, 5))
-print(f"{'Strategy':<15} | " + " | ".join([f"N={s:<3}" for s in snapshots]))
-print("-" * 55)
-
-for strategy in strategies_order:
-    if strategy not in relative_error_dict.get(target_case, {}):
-        continue
-    
-    exp_data = relative_error_dict[target_case][strategy]
-    relative_diffs_all_exp = list(exp_data.values())
-    
-    # Reconstruct the matrix as you did for plotting
-    n_runs = len(relative_diffs_all_exp)
-    rel_diff_mat = np.full((n_runs, case_max_len), np.nan)
-    for r, diff in enumerate(relative_diffs_all_exp):
-        this_len = min(len(diff), case_max_len)
-        rel_diff_mat[r, :this_len] = diff[:this_len]
-
-    # Calculate median evolution (non-smoothed for raw data analysis)
-    p50_evolution = np.nanmedian(rel_diff_mat, axis=0)
-    
-    # Extract values at snapshots
-    row_values = []
-    for s in snapshots:
-        idx = s - doe # Adjusting for the Initial Design of Experiments size
-        if 0 <= idx < len(p50_evolution):
-            val = p50_evolution[idx]
-            row_values.append(f"{val:.2E}")
-        else:
-            row_values.append("  N/A   ")
-            
-    pretty_label = custom_legend[strategies_order.index(strategy)]
-    print(f"{pretty_label:<15} | " + " | ".join(row_values))
 
 # ---------------------------------------------------------------------------
 # Figure F06: Sample-efficiency distribution (high-dimensional case)
 # ---------------------------------------------------------------------------
 # --- Configuration for High-Dimensional Case ---
-case = casestudy[-1]  # The 7th case study
-target_title = custom_titles[-1]
-limit = 501  # Limit for High-dimensional
-# mid_limit = 250
+case = casestudy[-1]
+limit = 501
 doe = 10
 stability_threshold = target_epsilon[case][-1]
 
-# Figure size adjusted for a single standalone plot
 fig, ax = plt.subplots(figsize=(8.75*cm, 7.5*cm))
 
 # --- 1. Get Ranking and Sorting ---
-# Extract the specific ranking for this case study
 case_ranking = strategy_rankings_dict.get(case, [])
-# Names sorted so the best (rank 1) is at the top
 sorted_order_names = [item['strategy'] for item in case_ranking][::-1]
-
-# Labels for the Y-axis
 ytick_labels = []
 
 # --- 2. Plotting ---
-for idx, strategy in enumerate(sorted_order_names):
-    # Retrieve the pretty label for the Y-axis
-    pretty_label = custom_legend[strategies_order.index(strategy)]
-    ytick_labels.append(pretty_label)
-    
-    # Process data for this strategy
+for strategy in sorted_order_names:
     data = []
     if strategy in relative_error_dict.get(case, {}):
         exp_results = relative_error_dict[case][strategy]
@@ -1390,41 +1456,87 @@ for idx, strategy in enumerate(sorted_order_names):
     if not data:
         continue
 
-    # Statistics
+    idx = len(ytick_labels)
+    pretty_label = custom_legend[strategies_order.index(strategy)]
+    ytick_labels.append(pretty_label)
+
     mean_val = np.mean(data)
     median_val = np.median(data)
     p25, p75 = np.percentile(data, [2.5, 97.5])
 
-    # Background shading for groups
     if strategy in ['moo_reliability', 'moo_eps_ew']:
-        ax.axhspan(idx - 0.5, idx + 0.5, color='black', alpha=0.15, zorder=0, lw=0)
+        ax.axhspan(idx - 0.5, idx + 0.5, color='black', alpha=0.2, zorder=0, lw=0)
     elif strategy in ['moo_knee', 'moo_compromise']:
-        ax.axhspan(idx - 0.5, idx + 0.5, color='black', alpha=0.05, zorder=0, lw=0)
+        ax.axhspan(idx - 0.5, idx + 0.5, color='black', alpha=0.07, zorder=0, lw=0)
 
     color = strategy_colors[strategy]
     is_moo = 'moo' in strategy.lower()
+    st_alpha = 0.9
     z_ord = 5 if is_moo else 2
 
-    # Plot IQR Line
-    ax.hlines(y=idx, xmin=p25, xmax=p75, 
-              color=color, linestyle='-', linewidth=1.5, alpha=0.9, zorder=z_ord)
-    
-    # Plot Mean (Solid)
-    ax.vlines(x=mean_val, ymin=idx-0.35, ymax=idx+0.35, 
-              color=color, linestyle='-', linewidth=1.2, alpha=0.9, zorder=z_ord+1)
-    
-    # Plot Median (Dashed Black)
-    ax.vlines(x=median_val, ymin=idx-0.35, ymax=idx+0.35, 
-              color='black', linestyle='--', linewidth=0.8, alpha=1.0, zorder=z_ord+2)
+    if strategy == eier_reference_strategy:
+        eier_line, = ax.plot(
+            [p25, p75],
+            [idx, idx],
+            color='white',
+            linestyle='-',
+            linewidth=0.4,
+            alpha=st_alpha,
+            zorder=z_ord,
+        )
+        eier_line.set_solid_capstyle('butt')
+        eier_line.set_path_effects(
+            [
+                pe.Stroke(
+                    linewidth=1.5, foreground='black', capstyle='projecting', joinstyle='miter'
+                ),
+                pe.Normal(),
+            ]
+        )
+    else:
+        ax.hlines(
+            y=idx,
+            xmin=p25,
+            xmax=p75,
+            color=color,
+            linestyle='-',
+            linewidth=1.5,
+            alpha=st_alpha,
+            zorder=z_ord,
+        )
+
+    ax.vlines(
+        x=mean_val,
+        ymin=idx - 0.32,
+        ymax=idx + 0.32,
+        color=color,
+        linestyle='-',
+        linewidth=0.7,
+        alpha=st_alpha,
+        zorder=z_ord + 1,
+    )
+
+    ax.vlines(
+        x=median_val,
+        ymin=idx - 0.32,
+        ymax=idx + 0.32,
+        color='black',
+        linestyle='--',
+        linewidth=0.6,
+        alpha=st_alpha,
+        zorder=z_ord + 2,
+    )
 
 # --- 3. Formatting ---
 mantissa = f"{stability_threshold:.0e}".split('e')[0]
 exponent = int(f"{stability_threshold:.0e}".split('e')[1])
 
-# ax.set_title(f"{target_title}\n" + rf"$\delta P_\text{{F,target}} = {mantissa} \cdot 10^{{{exponent}}}$", 
-            #  fontsize=font_size, pad=15)
+ax.set_title(
+    rf"$\delta P_{{\mathrm{{F,target}}}} = {mantissa} \cdot 10^{{{exponent}}}$",
+    fontsize=font_size,
+    pad=1,
+)
 
-ax.set_xlabel("Number of acquired samples", fontsize=font_size)
 ax.set_yticks(range(len(ytick_labels)))
 ax.set_yticklabels(ytick_labels, fontsize=font_size)
 
@@ -1439,38 +1551,49 @@ ax.tick_params(width=0.3, which='both')
 for spine in ax.spines.values():
     spine.set_linewidth(0.3)
 
-# 2. Create the handles
-mean_line = plt.Line2D([0], [0], color='black', linestyle='-', linewidth=1.0)
-median_line = plt.Line2D([0], [0], color='black', linestyle='--', linewidth=0.6)
-iqr_patch = plt.Line2D([0], [1], color='black', linestyle='-', linewidth=1) # Thicker for IQR
-
-# 3. Call the legend with the custom handler map
-ax.legend(
-    handles=[iqr_patch, mean_line, median_line],
-    labels=['2.5th - 97.5th Percentile', 'Mean', 'Median'],
-    handler_map={mean_line: HandlerVerticalLine(), 
-                 median_line: HandlerVerticalLine()},
-    loc='upper right', 
-    fontsize=font_size, 
-    frameon=True,
-    handlelength=1.0  # Shortened to look better for vertical lines
+mean_handle = plt.Line2D([0], [0], color='black', linestyle='-', lw=1.0, label='Mean')
+median_handle = plt.Line2D([0], [0], color='black', linestyle='--', lw=0.6, label='Median')
+eier_handle = plt.Line2D(
+    [0, 1],
+    [0, 0],
+    color='white',
+    linestyle='-',
+    linewidth=0.4,
+    label='EIER',
 )
 
-# # --- 4. Simplified Legend for single plot ---
-# legend_elements = [
-#     plt.Line2D([0], [0], color='gray', linestyle='-', lw=1.5, label='IQR (25th-75th)'),
-#     plt.Line2D([0], [0], color='gray', linestyle='-', lw=1.2, label='Mean'),
-#     plt.Line2D([0], [0], color='black', linestyle='--', lw=0.8, label='Median')
-# ]
+iqr_patch = plt.Line2D(
+    [0],
+    [0],
+    color='black',
+    linestyle='-',
+    linewidth=1.5,
+    label='2.5th-97.5th percentile',
+)
 
-# ax.legend(handles=legend_elements, loc='upper right', fontsize=font_size, frameon=True)
+handles2 = [iqr_patch, mean_handle, median_handle]
+
+fig.legend(
+    handles=handles2,
+    ncol=len(handles2),
+    bbox_to_anchor=(0.57, 0.01),
+    columnspacing=0.9,
+    **common_params,
+    numpoints=2,
+    handler_map={
+        mean_handle: HandlerVerticalLine(),
+        median_handle: HandlerVerticalLine(),
+    }
+)
+
+fig.text(0.55, 0.12, "Number of acquired samples", ha='center', fontsize=font_size)
+
 plt.subplots_adjust(
-    left=0.2, 
-    right=0.93, 
-    top=0.95, 
-    bottom=0.15, # Increases space at the very bottom
-    hspace=0.51, # Increases space between row 1 and row 2
-    wspace=0.25
+    left=0.2,
+    right=0.95,
+    top=0.94,
+    bottom=0.22,
+    hspace=0.51,
+    wspace=0.25,
 )
-# plt.tight_layout()
 finalize_figure(fig, "F06")

@@ -1,11 +1,8 @@
-from pathlib import Path
-import sys
 import json
 import pickle
 import numpy as np
 
-from postprocess_settings import (
-    REPO_ROOT,
+from Postprocess_settings import (
     BASE_RESULTS_DIR,
     AGGREGATED_DIR,
     CASE_STUDIES,
@@ -18,6 +15,7 @@ from postprocess_settings import (
     STRATEGY_COLORS,
     DOE_SAMPLES,
     MAX_LEN_BY_CASE,
+    REAL_PF_VALUES,
     strategy_to_dir,
 )
 
@@ -27,23 +25,6 @@ SAVE_OUTPUT_RESULTS_DICT = False
 
 # If True, store Pf_model trajectory inside relative_error_dict entries.
 INCLUDE_PF_MODEL_IN_RELATIVE = False
-
-
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from limit_states import REGISTRY as ls_REGISTRY  # noqa: E402
-
-
-def get_pf_reference_by_case(case_studies):
-    pf_ref_by_case = {}
-    for case in case_studies:
-        if case not in ls_REGISTRY:
-            print(f"[warning] case '{case}' not found in ls_REGISTRY")
-            continue
-        lstate = ls_REGISTRY[case]()
-        pf_ref_by_case[case] = float(lstate.target_pf)
-    return pf_ref_by_case
 
 
 def build_relative_entry(output_data, pf_ref):
@@ -100,7 +81,8 @@ def main():
     print(f"[start] SAVE_OUTPUT_RESULTS_DICT = {SAVE_OUTPUT_RESULTS_DICT}")
     print("")
 
-    pf_ref_by_case = get_pf_reference_by_case(CASE_STUDIES)
+    # Fixed reference probabilities used to replicate original figures.
+    pf_ref_by_case = dict(REAL_PF_VALUES)
 
     output_results_dict = {}
     config_results_dict = {}
@@ -127,9 +109,17 @@ def main():
 
         for strategy in DEFAULT_STRATEGIES:
             method_dir_name = strategy_to_dir(strategy)
-            method_dir = case_dir / method_dir_name
+            method_dir_candidates = [case_dir / method_dir_name]
+            if method_dir_name != strategy:
+                method_dir_candidates.append(case_dir / strategy)
 
-            if not method_dir.is_dir():
+            method_dir = None
+            for candidate in method_dir_candidates:
+                if candidate.is_dir():
+                    method_dir = candidate
+                    break
+
+            if method_dir is None:
                 print(f"  No directory found for {case}, {strategy}")
                 continue
 
