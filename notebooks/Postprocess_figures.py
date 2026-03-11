@@ -149,6 +149,16 @@ def parse_experiment_number(run_key):
 
     return text
 
+
+def _fmt_sci_compact(x):
+    mantissa, exponent = f"{float(x):.0e}".split("e")
+    return f"{mantissa}e{int(exponent)}"
+
+
+def _case_console_name(case):
+    title = CASE_TITLES.get(case, case)
+    return title.replace("$", "")
+
 # Let us adapt the code 
 
 # --- Parameters ------------------------------------------------------------
@@ -270,8 +280,8 @@ for case, data in threshold_dict.items():
 
 # Optional: Print to verify the generated levels
 for case, levels in target_epsilon.items():
-    formatted_levels = [f"{l:.2e}" for l in levels]
-    print(f"{case}: {formatted_levels}")
+    formatted_levels = [_fmt_sci_compact(l) for l in levels]
+    print(f"{_case_console_name(case)}: {formatted_levels}")
 
 
 # labels in the desired order
@@ -1206,7 +1216,103 @@ final_df = final_df[ordered_cols]
 final_df_sorted = final_df.sort_values("global_avg_rank")
 
 print("Average seed rank per strategy and limit state:\n")
-print(final_df_sorted.to_string())
+table_case_cols = {case: _case_console_name(case) for case in all_limit_states}
+table_case_cols["global_avg_rank"] = "Avg. Seed Rank (down)"
+table_case_cols["global_avg_samples"] = "Avg. Samples"
+
+final_df_print = final_df_sorted.rename(columns=table_case_cols).copy()
+final_df_print.index = [strategy_label(s) for s in final_df_print.index]
+final_df_print.index.name = "Strategy"
+final_df_print = final_df_print.apply(
+    lambda col: col.map(lambda v: f"{v:.2f}" if pd.notna(v) else "N/A")
+)
+print(final_df_print.to_string())
+
+# Sample-count tables per case, ordered as in the global average rank table
+ordered_strategies_by_global_rank = list(final_df_sorted.index)
+
+for case in casestudy:
+    if case not in seed_ranking_dict:
+        print(f"[WARN] No seed ranking data for case '{case}', skipping sample-count table.")
+        continue
+
+    print(f"\n{'='*60}")
+    print(f"CASE STUDY: {_case_console_name(case)}")
+    print(f"{'='*60}")
+
+    case_threshold = threshold_dict.get(case, {}).get("threshold_delta_pf", None)
+    if case_threshold is not None:
+        print(f"\nTarget Delta Pf: {_fmt_sci_compact(case_threshold)}")
+    else:
+        print("\nTarget Delta Pf: N/A")
+
+    print(f"{'Strategy':<20} | {'Mean':>7} | {'Median':>7} | (2.5% - 97.5%)")
+    print("-" * 60)
+
+    seeds = seed_ranking_dict[case]["seeds"]
+    per_strat_samples = {}
+    for s in seeds:
+        strat = s["strategy"]
+        if strat not in all_strategies:
+            continue
+        per_strat_samples.setdefault(strat, []).append(float(s["first_hit_samples"]))
+
+    for strat in ordered_strategies_by_global_rank:
+        values = per_strat_samples.get(strat, [])
+        label = strategy_label(strat)
+        if len(values) == 0:
+            print(f"{label:<20} | {'N/A':>7} | {'N/A':>7} | (N/A - N/A)")
+            continue
+
+        arr = np.asarray(values, dtype=float)
+        mean_val = float(np.mean(arr))
+        median_val = float(np.median(arr))
+        p2_5, p97_5 = np.percentile(arr, [2.5, 97.5])
+        print(
+            f"{label:<20} | {mean_val:>7.2f} | {median_val:>7.2f} | "
+            f"({p2_5:>6.2f} - {p97_5:>6.2f})"
+        )
+
+# Additional ranking table for the high-dimensional case only
+high_dim_case = "high_dimensional"
+if high_dim_case in seed_ranking_dict:
+    seeds_hd = seed_ranking_dict[high_dim_case]["seeds"]
+    per_strat_hd = {}
+
+    for s in seeds_hd:
+        strat = s["strategy"]
+        if strat not in all_strategies:
+            continue
+        per_strat_hd.setdefault(strat, {"ranks": [], "samples": []})
+        per_strat_hd[strat]["ranks"].append(float(s["global_rank"]))
+        per_strat_hd[strat]["samples"].append(float(s["first_hit_samples"]))
+
+    hd_rows = []
+    for strat, vals in per_strat_hd.items():
+        ranks_arr = np.asarray(vals["ranks"], dtype=float)
+        samples_arr = np.asarray(vals["samples"], dtype=float)
+        p2_5, p97_5 = np.percentile(samples_arr, [2.5, 97.5])
+        median_val = float(np.median(samples_arr))
+
+        hd_rows.append(
+            {
+                "Ranked Strategy": strategy_label(strat),
+                "Avg. Seed Rank (down)": float(np.mean(ranks_arr)),
+                "Avg. Samples": float(np.mean(samples_arr)),
+                "Median (2.5th, 97.5th)": f"{median_val:.1f} ({p2_5:.1f}, {p97_5:.1f})",
+            }
+        )
+
+    hd_rank_df = pd.DataFrame(hd_rows).sort_values("Avg. Seed Rank (down)", ascending=True)
+    hd_rank_df.insert(0, "Rank", np.arange(1, len(hd_rank_df) + 1))
+
+    hd_rank_df["Avg. Seed Rank (down)"] = hd_rank_df["Avg. Seed Rank (down)"].map(lambda v: f"{v:.2f}")
+    hd_rank_df["Avg. Samples"] = hd_rank_df["Avg. Samples"].map(lambda v: f"{v:.2f}")
+
+    print(f"\nRanking summary for case '{high_dim_case}':\n")
+    print(hd_rank_df.to_string(index=False))
+else:
+    print(f"[WARN] No seed ranking data for case '{high_dim_case}', skipping high-dimensional ranking table.")
 
 # ---------------------------------------------------------------------------
 # Figure F05: Pf evolution (high-dimensional case)
