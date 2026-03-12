@@ -85,14 +85,32 @@ _strategy_display_order = [
 ]
 custom_legend = [strategy_label(s) for s in _strategy_display_order]
 
-print(f"[load] relative_error_dict from: {rel_path}")
-print(f"[load] config_results_dict  from: {cfg_path}")
-print(f"[load] cases available: {len(casestudy)}")
+SUMMARY_TXT_PATH = AGGREGATED_DIR / "postprocess_figures_summary.txt"
+REPORT_LINES = []
+
+
+def report(message=""):
+    text = str(message)
+    print(text)
+    REPORT_LINES.append(text)
+
+
+def flush_report_summary(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f_id:
+        f_id.write("\n".join(REPORT_LINES).rstrip() + "\n")
+    print(f"[save][SUMMARY] {path}")
+
+
+report("[start] figures postprocess")
+report(f"  relative_error_dict : {rel_path}")
+report(f"  config_results_dict : {cfg_path}")
+report(f"  cases available     : {len(casestudy)}")
 
 # ---------------------------------------------------------------------------
 # Figure controls (inputs)
 # ---------------------------------------------------------------------------
-FIGURES_DIR = AGGREGATED_DIR.parent.parent / "Figures"
+FIGURES_DIR = AGGREGATED_DIR / "Figures"
 SHOW_FIGURES = False
 FIGURE_EXPORTS = {
     "F01": "pf_evolution_single_row.pdf",
@@ -115,12 +133,12 @@ FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
 def finalize_figure(fig, figure_id):
     if not FIGURE_ENABLED.get(figure_id, True):
-        print(f"[skip][{figure_id}] Figure disabled by toggle")
+        report(f"[skip][{figure_id}] Figure disabled by toggle")
         plt.close(fig)
         return
     output_path = FIGURES_DIR / FIGURE_EXPORTS[figure_id]
     fig.savefig(output_path)
-    print(f"[save][{figure_id}] {output_path}")
+    report(f"[save][{figure_id}] {output_path}")
     if SHOW_FIGURES:
         plt.show()
     else:
@@ -171,6 +189,13 @@ excluded_from_threshold = {eier_reference_strategy}
 excluded_from_f03 = {eier_reference_strategy}
 debug_case_for_print = None  # e.g., "four_branch_7"
 # We calculate threshold for the specified ls
+
+report("[config] threshold/ranking conditions")
+report(f"  captured_ls          : {captured_ls}")
+report(f"  threshold_factor     : {threshold_factor}")
+report(f"  required_consecutive : {required_consecutive}")
+report(f"  excluded threshold   : [{eier_reference_strategy}]")
+report("")
 
 # --- Step 2: per-strategy global minima, then top-k per case --------------
 
@@ -232,7 +257,7 @@ for case in casestudy:
         })
 
     if not per_strategy_minima:
-        print(f"Warning: no valid minima for case '{case}'.")
+        report(f"[warn] no valid minima for case '{case}'.")
         continue
 
     # sort strategies by their global minimum δPf
@@ -281,7 +306,9 @@ for case, data in threshold_dict.items():
 # Optional: Print to verify the generated levels
 for case, levels in target_epsilon.items():
     formatted_levels = [_fmt_sci_compact(l) for l in levels]
-    print(f"{_case_console_name(case)}: {formatted_levels}")
+    report(f"threshold[{case}] = {formatted_levels[0]} "
+           f"(defined by {strategy_label(threshold_dict[case]['threshold_entry']['strategy'])})")
+report("")
 
 
 # labels in the desired order
@@ -701,7 +728,7 @@ for case in casestudy:
     if case not in relative_error_dict:
         continue
     if case not in threshold_dict:
-        print(f"No threshold found for case '{case}', skipping.")
+        report(f"[warn] no threshold found for case '{case}', skipping.")
         continue
 
     threshold = threshold_dict[case]["threshold_delta_pf"]
@@ -767,7 +794,7 @@ for case in casestudy:
             })
 
     if not seed_entries:
-        print(f"No seed data for case '{case}'.")
+        report(f"[warn] no seed data for case '{case}'.")
         continue
 
     # --- Define NEW ranking rule: by first_hit_samples ---------------------
@@ -860,8 +887,8 @@ if debug_case_for_print and debug_case_for_print in seed_ranking_dict:
         strat = s["strategy"]
         samples_by_strat.setdefault(strat, []).append(s["first_hit_samples"])
     
-    print(f"{'Strategy':<15} | {'Avg. Rank':<10} | {'Avg. Samples':<12}")
-    print("-" * 45)
+    report(f"{'Strategy':<15} | {'Avg. Rank':<10} | {'Avg. Samples':<12}")
+    report("-" * 45)
     
     # Loop through the already sorted strategy_rankings_dict
     for entry in strategy_rankings_dict[case]:
@@ -870,7 +897,8 @@ if debug_case_for_print and debug_case_for_print in seed_ranking_dict:
         avg_samples = np.mean(samples_by_strat[strat_key])
         
         display = display_names.get(strat_key, strat_key)
-        print(f"{display:<15} | {avg_rank:<10.2f} | {avg_samples:<12.1f}")
+        report(f"{display:<15} | {avg_rank:<10.2f} | {avg_samples:<12.1f}")
+    report("")
 
 # ---------------------------------------------------------------------------
 # Figure F03: Number of failed experiments at t_max (stacked bars)
@@ -1172,7 +1200,7 @@ samples_df = pd.DataFrame(index=all_strategies, columns=all_limit_states, dtype=
 
 for case in all_limit_states:
     if case not in seed_ranking_dict:
-        print(f"[WARN] No seed ranking data for case '{case}', skipping.")
+        report(f"[warn] no seed ranking data for case '{case}', skipping.")
         continue
 
     seeds = seed_ranking_dict[case]["seeds"]
@@ -1215,7 +1243,7 @@ final_df = final_df[ordered_cols]
 # Sort strategies by global_avg_rank (lower rank = better)
 final_df_sorted = final_df.sort_values("global_avg_rank")
 
-print("Average seed rank per strategy and limit state:\n")
+report("Average seed rank per strategy and limit state:")
 table_case_cols = {case: _case_console_name(case) for case in all_limit_states}
 table_case_cols["global_avg_rank"] = "Avg. Seed Rank (down)"
 table_case_cols["global_avg_samples"] = "Avg. Samples"
@@ -1226,28 +1254,29 @@ final_df_print.index.name = "Strategy"
 final_df_print = final_df_print.apply(
     lambda col: col.map(lambda v: f"{v:.2f}" if pd.notna(v) else "N/A")
 )
-print(final_df_print.to_string())
+report(final_df_print.to_string())
+report("")
 
 # Sample-count tables per case, ordered as in the global average rank table
 ordered_strategies_by_global_rank = list(final_df_sorted.index)
 
 for case in casestudy:
     if case not in seed_ranking_dict:
-        print(f"[WARN] No seed ranking data for case '{case}', skipping sample-count table.")
+        report(f"[warn] no seed ranking data for case '{case}', skipping sample-count table.")
         continue
 
-    print(f"\n{'='*60}")
-    print(f"CASE STUDY: {_case_console_name(case)}")
-    print(f"{'='*60}")
+    report(f"{'='*60}")
+    report(f"CASE STUDY: {_case_console_name(case)}")
+    report(f"{'='*60}")
 
     case_threshold = threshold_dict.get(case, {}).get("threshold_delta_pf", None)
     if case_threshold is not None:
-        print(f"\nTarget Delta Pf: {_fmt_sci_compact(case_threshold)}")
+        report(f"Target Delta Pf: {_fmt_sci_compact(case_threshold)}")
     else:
-        print("\nTarget Delta Pf: N/A")
+        report("Target Delta Pf: N/A")
 
-    print(f"{'Strategy':<20} | {'Mean':>7} | {'Median':>7} | (2.5% - 97.5%)")
-    print("-" * 60)
+    report(f"{'Strategy':<20} | {'Mean':>7} | {'Median':>7} | (2.5% - 97.5%)")
+    report("-" * 60)
 
     seeds = seed_ranking_dict[case]["seeds"]
     per_strat_samples = {}
@@ -1261,17 +1290,18 @@ for case in casestudy:
         values = per_strat_samples.get(strat, [])
         label = strategy_label(strat)
         if len(values) == 0:
-            print(f"{label:<20} | {'N/A':>7} | {'N/A':>7} | (N/A - N/A)")
+            report(f"{label:<20} | {'N/A':>7} | {'N/A':>7} | (N/A - N/A)")
             continue
 
         arr = np.asarray(values, dtype=float)
         mean_val = float(np.mean(arr))
         median_val = float(np.median(arr))
         p2_5, p97_5 = np.percentile(arr, [2.5, 97.5])
-        print(
+        report(
             f"{label:<20} | {mean_val:>7.2f} | {median_val:>7.2f} | "
             f"({p2_5:>6.2f} - {p97_5:>6.2f})"
         )
+    report("")
 
 # Additional ranking table for the high-dimensional case only
 high_dim_case = "high_dimensional"
@@ -1309,10 +1339,11 @@ if high_dim_case in seed_ranking_dict:
     hd_rank_df["Avg. Seed Rank (down)"] = hd_rank_df["Avg. Seed Rank (down)"].map(lambda v: f"{v:.2f}")
     hd_rank_df["Avg. Samples"] = hd_rank_df["Avg. Samples"].map(lambda v: f"{v:.2f}")
 
-    print(f"\nRanking summary for case '{high_dim_case}':\n")
-    print(hd_rank_df.to_string(index=False))
+    report(f"Ranking summary for case '{high_dim_case}':")
+    report(hd_rank_df.to_string(index=False))
+    report("")
 else:
-    print(f"[WARN] No seed ranking data for case '{high_dim_case}', skipping high-dimensional ranking table.")
+    report(f"[warn] no seed ranking data for case '{high_dim_case}', skipping high-dimensional ranking table.")
 
 # ---------------------------------------------------------------------------
 # Figure F05: Pf evolution (high-dimensional case)
@@ -1703,3 +1734,4 @@ plt.subplots_adjust(
     wspace=0.25,
 )
 finalize_figure(fig, "F06")
+flush_report_summary(SUMMARY_TXT_PATH)
