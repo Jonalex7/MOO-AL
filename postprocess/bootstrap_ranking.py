@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from Postprocess_settings import (
+from settings import (
     AGGREGATED_DIR,
     CASE_STUDIES,
     DEFAULT_STRATEGIES,
@@ -114,7 +114,7 @@ def load_relative_error_dict_legacy() -> Dict[str, Dict[str, Dict[str, List[floa
     with open(rel_path, "rb") as f_id:
         relative_error_dict_raw = pickle.load(f_id)
 
-    # Keep the legacy format used in Postprocess_figures.py:
+    # Keep the legacy format used in figures.py:
     # relative_error_dict[case][strategy][run] -> list of absolute relative error.
     relative_error_dict = {}
     for case, strategy_dict in relative_error_dict_raw.items():
@@ -201,7 +201,7 @@ def compute_threshold_dict(
                 this_len = min(len(rel_diff), cap_len)
                 rel_diff_mat[row_idx, :this_len] = rel_diff[:this_len]
 
-            # Mirror Postprocess_figures.py threshold logic.
+            # Mirror figures.py threshold logic.
             median_evolution = np.median(rel_diff_mat, axis=0)
             finite_mask = np.isfinite(median_evolution)
             if not np.any(finite_mask):
@@ -532,7 +532,7 @@ def main() -> None:
     if not available_cases:
         raise RuntimeError(
             "No case data found in relative_error_dict.pkl. "
-            "Run Postprocess_output_files.py first."
+            "Run output_files.py first."
         )
 
     strategies = [s for s in DEFAULT_STRATEGIES if any(s in relative_error_dict[c] for c in available_cases)]

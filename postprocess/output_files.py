@@ -2,7 +2,7 @@ import json
 import pickle
 import numpy as np
 
-from Postprocess_settings import (
+from settings import (
     BASE_RESULTS_DIR,
     AGGREGATED_DIR,
     CASE_STUDIES,

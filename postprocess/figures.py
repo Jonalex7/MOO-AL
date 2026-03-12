@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 from scipy.ndimage import gaussian_filter1d
 
-from Postprocess_settings import (
+from settings import (
     AGGREGATED_DIR,
     CASE_STUDIES,
     GROUP_2D,
@@ -85,7 +85,7 @@ _strategy_display_order = [
 ]
 custom_legend = [strategy_label(s) for s in _strategy_display_order]
 
-SUMMARY_TXT_PATH = AGGREGATED_DIR / "postprocess_figures_summary.txt"
+SUMMARY_TXT_PATH = AGGREGATED_DIR / "Figures" / "postprocess_figures_summary.txt"
 REPORT_LINES = []
 
 
