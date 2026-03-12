@@ -2,6 +2,7 @@ import datetime
 import os
 import argparse
 import json
+import pickle
 import time
 
 import numpy as np
@@ -44,6 +45,11 @@ def main(config, name_exp):
     n_mcs_pf = config['n_mcs_pf']  # n_MonteCarlo pool of samples for pf estimation
     seed_exp = config['seed'] # seed for experiment
     save_interval = config['save_interval']  # interval to save model
+    save_model_gp = bool(config.get("save_model_gp", config.get("model_gp", False)))
+    config["save_model_gp"] = save_model_gp
+    # Drop legacy key to keep saved config.json consistent.
+    if "model_gp" in config:
+        del config["model_gp"]
     config['name_exp'] = name_exp
 
     # Loading limit state and ref. Pf
@@ -61,9 +67,13 @@ def main(config, name_exp):
     run_folder = f'{al_batch}_{name_exp}_{date_time_stamp}'
     results_dir = f'results/{casestudy}/{method_name}/{run_folder}/'
 
-    # store_model_dir = results_dir + 'model/'
+    store_model_dir = os.path.join(results_dir, "model")
 
-    for dir_path in [results_dir]:
+    dirs_to_create = [results_dir]
+    if save_model_gp:
+        dirs_to_create.append(store_model_dir)
+
+    for dir_path in dirs_to_create:
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
 
@@ -86,7 +96,9 @@ def main(config, name_exp):
     random_state = np.random.RandomState(seed_exp)
     config['seed'] = seed_exp  #saving seed
     n_g_pf = int(config.get('n_g_pf', 1000))
-    n_mcs_eier_int = int(config.get('n_mcs_eier_int', int(n_mcs_pool)))
+    n_mcs_eier_int = None
+    if al_strategy == "eier":
+        n_mcs_eier_int = int(config.get('n_mcs_eier_int', int(n_mcs_pool)))
     pf_post_pool_size = int(config.get('n_pf_post_pool', 10000))
     pf_post_batch_size = int(config.get('pf_post_batch_size', 500))
     predict_batch_size = int(config.get('predict_batch_size', 10000))
@@ -94,19 +106,23 @@ def main(config, name_exp):
     if raw_cpu_workers is not None:
         resolved_cpu_workers = resolve_cpu_workers(raw_cpu_workers)
         predict_n_jobs = resolved_cpu_workers
-        eier_num_workers = resolved_cpu_workers
+        if al_strategy == "eier":
+            eier_num_workers = resolved_cpu_workers
         config['cpu_workers'] = int(resolved_cpu_workers)
     else:
         predict_n_jobs = resolve_cpu_workers(config.get('predict_n_jobs', -1))
-        eier_num_workers = resolve_cpu_workers(config.get('eier_num_workers', 1))
-    eier_num_workers = max(1, int(eier_num_workers))
+        if al_strategy == "eier":
+            eier_num_workers = resolve_cpu_workers(config.get('eier_num_workers', 1))
+    if al_strategy == "eier":
+        eier_num_workers = max(1, int(eier_num_workers))
     config['n_g_pf'] = n_g_pf
-    config['n_mcs_eier_int'] = n_mcs_eier_int
     config['n_pf_post_pool'] = pf_post_pool_size
     config['pf_post_batch_size'] = pf_post_batch_size
     config['predict_batch_size'] = predict_batch_size
     config['predict_n_jobs'] = predict_n_jobs
-    config['eier_num_workers'] = eier_num_workers
+    if al_strategy == "eier":
+        config['n_mcs_eier_int'] = n_mcs_eier_int
+        config['eier_num_workers'] = eier_num_workers
 
     # Store the config file as a json file
     with open(results_dir + 'config.json', 'w') as file_id:
@@ -170,6 +186,7 @@ def main(config, name_exp):
     print(f"  config                : {config}")
     print(f"  reference_Pf          : {_fmt_sci(Pf_ref)}")
     print(f"  candidate_pool/iter   : {int(n_mcs_pool)}")
+    print(f"  save_model_gp         : {save_model_gp}")
     if al_strategy == "eier":
         print(f"  eier_integration/iter : {int(n_mcs_eier_int)}")
     print(
@@ -299,6 +316,16 @@ def main(config, name_exp):
             )
         wandb.log(metrics_payload, step=it)
 
+        # Stop acquisition once the requested training budget is reached.
+        # We still keep the Pf estimate computed at this final train size.
+        if len(x_train_norm) >= total_samples:
+            print(
+                f"Reached total_samples={int(total_samples)} with train_size={len(x_train_norm)}. "
+                "Stopping acquisition after final Pf estimate."
+            )
+            print("")
+            break
+
         # Making predictions of mean and std for mc population 
         x_mc_pool = np.random.normal(0, 1, size=(int(n_mcs_pool), lstate.input_dim))
         x_mc_pool = np.asarray(x_mc_pool, dtype=np.float64)
@@ -377,9 +404,10 @@ def main(config, name_exp):
             with open(results_dir + 'output.json', 'w') as file_id:
                         json.dump(results_file, file_id)
 
-            # # Save the model (pickle)
-            # with open(store_model_dir + 'gp_' + str(it) + '.pkl', 'wb') as file_id:
-            #     pickle.dump(model_gp, file_id)
+            if save_model_gp:
+                model_path = os.path.join(store_model_dir, f"gp_{it}.pkl")
+                with open(model_path, 'wb') as file_id:
+                    pickle.dump(model_gp, file_id)
 
     # Saving final results
     results_file['Pf_model'] = pf_evol
@@ -397,9 +425,10 @@ def main(config, name_exp):
     with open(results_dir + 'output.json', 'w') as file_id:
                     json.dump(results_file, file_id, indent=4)
 
-    # # Save the model (pickle)
-    # with open(store_model_dir + 'gp_' + "last" + '.pkl', 'wb') as file_id:
-    #     pickle.dump(model_gp, file_id)
+    if save_model_gp:
+        model_path = os.path.join(store_model_dir, "gp_last.pkl")
+        with open(model_path, 'wb') as file_id:
+            pickle.dump(model_gp, file_id)
 
     end_time = time.time()
     execution_time = end_time - start_time

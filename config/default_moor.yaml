@@ -18,6 +18,7 @@ n_mcs_pf: 10000000 # size of MonteCarlo sampling for pf estimation
 
 #--- output model----
 save_interval: 10
+save_model_gp: False # If True, save pickled GP checkpoints
 pareto_metrics: True # Save Pareto metrics for each iteration
 
 # wandb logging
