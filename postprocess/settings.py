@@ -48,9 +48,12 @@ DEFAULT_STRATEGIES = [
 ]
 
 
-# Keep empty unless a strategy folder name differs from its strategy key.
-# Current results_tracking uses canonical names (e.g., moo_eps_ew folder).
-STRATEGY_DIR_MAP = {}
+# Map strategy keys to preferred results folders.
+# For linear-decay MOO runs, new folders use `moo_linear_decay`,
+# while legacy artifacts may still exist as `moo_eps_ew`.
+STRATEGY_DIR_MAP = {
+    "moo_eps_ew": "moo_linear_decay",
+}
 
 
 STRATEGY_LABELS = {

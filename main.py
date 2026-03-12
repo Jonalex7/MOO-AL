@@ -126,7 +126,7 @@ def main(config, name_exp):
     }
     # If moo strategy, add moo_method
     if al_strategy == 'moo':
-        args_al['moo_method'] = config['moo_method']    # 'knee', 'compromised' 'reliability'
+        args_al['moo_method'] = config['moo_method']    # 'knee', 'compromise', 'reliability', 'linear_decay'
         # If moo_reliability strategy, add relevant parameters
         if args_al['moo_method'] == 'reliability': 
             args_al['N_it'] = config['N_it']  # Number of iterations to consider for moving average
@@ -134,7 +134,7 @@ def main(config, name_exp):
             args_al['k_balance'] = config['k_balance'] # Positive constant controlling how quickly gamma transition from 0 to 1
             args_al['input_dim'] = lstate.input_dim
     
-        if args_al['moo_method'] == "eps_greedy" or args_al['moo_method'] == "eps_lw":
+        if args_al['moo_method'] == "linear_decay":
             args_al['eps_start'] = config['eps_start']  # Initial epsilon value
             args_al['eps_end'] = config['eps_end']      # Final epsilon value
             args_al['eps_T'] = config['eps_T']          # Number of iterations to decay over

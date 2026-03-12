@@ -15,15 +15,15 @@ class AcquisitionStrategy:
     def __init__(
         self,
         acquisition_strategy: str, # 'u', 'eff', or 'moo'
-        moo_method: Optional[str] = None, # 'knee', 'compromise', or 'reliability'
+        moo_method: Optional[str] = None, # 'knee', 'compromise', 'reliability', or 'linear_decay'
         N_it: int = 2, # Number of iterations to consider for moving average in reliability method
         delta_P0: float = 0.2, # (0,1) threshold of relative difference at which gamma=0.5
         k_balance: float = 40,  # Positive constant controlling how quickly gamma transition from 0 to 1
         input_dim: int = 2,
         pareto_metrics: bool = False, # If True, returns Pareto front and selected indices
-        eps_start: float = 1.0,     # start fully exploratory
-        eps_end: float = 0.0,       # end fully exploitative
-        eps_T: int = 100,             # number of calls to decay over
+        eps_start: float = 1.0,     # start with exploration emphasis
+        eps_end: float = 0.0,       # end with exploitation emphasis
+        eps_T: int = 100,           # number of calls to decay over
         portfolio_lambda: float = 2.0,   # Hedge balance (lambda)
         portfolio_delta: float = 0.7,    # Memory factor (delta)
         batch_size_acq: int = 500,
@@ -39,8 +39,10 @@ class AcquisitionStrategy:
         self.pareto_metrics = pareto_metrics
 
         if self.strategy == "moo":
-            if moo_method not in ("knee", "compromise", "reliability", "eps_greedy", "eps_lw"):
-                raise ValueError("`moo_method` must be 'knee', 'compromise', 'reliability', 'eps_greedy' 'eps_lw")
+            if moo_method not in ("knee", "compromise", "reliability", "linear_decay"):
+                raise ValueError(
+                    "`moo_method` must be 'knee', 'compromise', 'reliability', or 'linear_decay'"
+                )
             self.moo_method = moo_method
             # Initialize reliability parameters only when using moo_reliability
             if self.moo_method == "reliability":
@@ -50,8 +52,8 @@ class AcquisitionStrategy:
                 self.input_dim = input_dim
                 self.Pf_prev = 0.0
                 self.delta_Pf_buffer: List[float] = []
-            # epsilon-greedy schedule state
-            if self.moo_method == "eps_greedy" or self.moo_method == "eps_lw":
+            # Linear-decay schedule state (used by linear_decay method).
+            if self.moo_method == "linear_decay":
                 self.eps_start = float(eps_start)
                 self.eps_end   = float(eps_end)
                 self.eps_T     = int(eps_T)
@@ -390,12 +392,12 @@ class AcquisitionStrategy:
         self,
         mean_prediction: np.ndarray,
         std_prediction: np.ndarray,
-        method: Optional[str] = None,  # 'knee', 'compromise' or 'reliability'
+        method: Optional[str] = None,  # 'knee', 'compromise', 'reliability', or 'linear_decay'
         pf_estimate: Optional[float] = None, # Current Pf estimate for reliability method (if applicable)
     ) -> List[int]:
         """
         Multi-objective selection via Pareto front.
-        method: 'knee', 'compromise' or 'reliability'
+        method: 'knee', 'compromise', 'reliability', or 'linear_decay'
         """
         # Compute the Pareto front
         mean_pred_norm = normalize_array(np.abs(mean_prediction))
@@ -411,11 +413,8 @@ class AcquisitionStrategy:
         elif method == 'reliability':
             moo_pareto_index = self.get_moo_reliability(pareto_front=pareto_front, pf_estimate=pf_estimate)
             return pareto_front, [int(pareto_front_indices[moo_pareto_index])], p_min, p_max
-        elif method == 'eps_greedy':
-            pos_on_front = self.get_moo_eps_greedy(pareto_front)
-            return pareto_front, [int(pareto_front_indices[pos_on_front])], p_min, p_max
-        elif method == 'eps_lw':
-            pos_on_front = self.get_moo_eps_euclidean(pareto_front)
+        elif method == 'linear_decay':
+            pos_on_front = self.get_moo_linear_decay_euclidean(pareto_front)
             return pareto_front, [int(pareto_front_indices[pos_on_front])], p_min, p_max
         else:
             raise ValueError(f"Unknown MO pareto strategy: {method}")
@@ -538,29 +537,15 @@ class AcquisitionStrategy:
         arg_min = int(np.argmin(dist_sq))
         return arg_min
 
-    def _eps_value(self) -> float:
-        """Linear decay epsilon in [eps_start -> eps_end] over eps_T calls."""
+    def _linear_decay_value(self) -> float:
+        """Linear decay parameter in [eps_start -> eps_end] over eps_T calls."""
         if self.eps_T <= 0:
             return self.eps_end
         frac = min(1.0, self._eps_t / self.eps_T)
         return self.eps_start + (self.eps_end - self.eps_start) * frac
 
-    def get_moo_eps_greedy(self, pareto_front: np.ndarray) -> int:
-        """
-        Deterministic epsilon-greedy along the sorted Pareto front.
-        Maps epsilon to a position from 0 (explore) -> K-1 (exploit).
-        """
-        K = pareto_front.shape[0]
-        if K == 0:
-            raise ValueError("Empty Pareto front.")
-        eps = self._eps_value()              # 1.0 -> 0.0 over time
-        pos = int(round((1.0 - eps) * (K - 1)))
-        pos = max(0, min(K - 1, pos))        # clamp
-        self._eps_t += 1                      # advance schedule after each use
-        return pos
-
-    def reset_eps_schedule(self):
-        """Optional: call this if you want to restart from full exploration."""
+    def reset_linear_decay_schedule(self):
+        """Optional: call this if you want to restart the linear-decay schedule."""
         self._eps_t = 0
 
     def _portfolio_step(
@@ -620,44 +605,9 @@ class AcquisitionStrategy:
         self.rewards_history.append(self._G.tolist())
         return chosen_idx
 
-    def get_moo_eps_weighted(self, pareto_front: np.ndarray) -> int:
+    def get_moo_linear_decay_euclidean(self, pareto_front: np.ndarray) -> int:
         """
-        Epsilon-greedy via linear scalarization on the current Pareto front.
-        gamma = eps in [0..1]: 1 -> exploration (std), 0 -> exploitation (|mean| proxy).
-        Returns the *index on the Pareto set* (map to full pool outside as usual).
-        """
-        K = pareto_front.shape[0]
-        if K == 0:
-            raise ValueError("Empty Pareto front.")
-        if K == 1:
-            self._eps_t += 1
-            return 0
-
-        # Columns assumed "higher is better":
-        # pareto_front[:, 0] -> exploitation-oriented score 
-        # pareto_front[:, 1] -> exploration 
-        pf = pareto_front
-
-        # Per-column min-max normalize on the *current* front (robust to changing K / scale)
-        col_min = np.min(pf, axis=0)
-        col_max = np.max(pf, axis=0)
-        denom = np.maximum(col_max - col_min, 1e-12)
-        pf_norm = (pf - col_min) / denom  # shape (K, 2), in [0,1]
-
-        # Epsilon schedule -> gamma (weight on exploration)
-        gamma = float(self._eps_value())   # 1.0 -> explore-only; 0.0 -> exploit-only
-
-        # Linear scalarization and selection
-        # scores = (1 - gamma) * exploitation + gamma * exploration
-        scores = (1.0 - gamma) * pf_norm[:, 0] + gamma * pf_norm[:, 1]
-        idx_on_front = int(np.argmax(scores))
-
-        self._eps_t += 1
-        return idx_on_front
-
-    def get_moo_eps_euclidean(self, pareto_front: np.ndarray) -> int:
-        """
-        Epsilon-greedy via Euclidean-compromise scalarization on the current Pareto front.
+        Linear decay via Euclidean-compromise scalarization on the current Pareto front.
 
         We assume pareto_front[:, 0] and [:, 1] are 'higher is better' scores
         (e.g. something like [-mean_norm, std_norm] upstream).
@@ -690,11 +640,11 @@ class AcquisitionStrategy:
         delta_mu    = 1.0 - pf_norm[:, 0]   
         delta_sigma = 1.0 - pf_norm[:, 1]  
 
-        # schedule
-        # eps ~ 1 => emphasize exploration
-        # eps ~ 0 => emphasize exploitation
-        eps = float(self._eps_value())
-        w   = 1.0 - eps           # w in [0,1]
+        # Linear schedule:
+        # value ~ 1 => emphasize exploration
+        # value ~ 0 => emphasize exploitation
+        decay_value = float(self._linear_decay_value())
+        w = 1.0 - decay_value           # w in [0,1]
 
         # Weighted squared distance (no need to take sqrt: argmin is the same)
         dist_sq = w * (delta_mu ** 2) + (1.0 - w) * (delta_sigma ** 2)
