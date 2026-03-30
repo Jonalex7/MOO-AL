@@ -7,6 +7,9 @@ passive_samples: 10     # initial DoE with LHS
 n_mcs_pool: 1000000  # size of MonteCarlo pool candidates
 seed: null # null for random seed (default)
 
+# --- REIF / REIF2 parameter ---
+reif_w: 2.0  # weight parameter used in the REIF and REIF2 criteria
+
 # --- reliability estimation---
 n_mcs_pf: 10000000 # size of MonteCarlo sampling for pf estimation
 

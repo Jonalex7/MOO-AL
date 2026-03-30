@@ -47,6 +47,7 @@ def main(config, name_exp):
     save_interval = config['save_interval']  # interval to save model
     save_model_gp = bool(config.get("save_model_gp", config.get("model_gp", False)))
     eff_constant = float(config.get("eff_constant", 2.0))
+    reif_w = float(config.get("reif_w", 2.0))
     config["save_model_gp"] = save_model_gp
     # Drop legacy key to keep saved config.json consistent.
     if "model_gp" in config:
@@ -123,6 +124,8 @@ def main(config, name_exp):
     config['predict_n_jobs'] = predict_n_jobs
     if al_strategy in {"eff", "portfolio"}:
         config['eff_constant'] = eff_constant
+    if al_strategy in {"reif", "reif2", "portfolio"}:
+        config['reif_w'] = reif_w
     if al_strategy == "eier":
         config['n_mcs_eier_int'] = n_mcs_eier_int
         config['eier_num_workers'] = eier_num_workers
@@ -145,6 +148,8 @@ def main(config, name_exp):
     }
     if al_strategy in {"eff", "portfolio"}:
         args_al['eff_constant'] = eff_constant
+    if al_strategy in {"reif", "reif2", "portfolio"}:
+        args_al['reif_w'] = reif_w
     # If moo strategy, add moo_method
     if al_strategy == 'moo':
         args_al['moo_method'] = config['moo_method']    # 'knee', 'compromise', 'reliability', 'linear_decay'

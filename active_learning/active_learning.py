@@ -27,6 +27,7 @@ class AcquisitionStrategy:
         portfolio_lambda: float = 2.0,   # Hedge balance (lambda)
         portfolio_delta: float = 0.7,    # Memory factor (delta)
         eff_constant: float = 2.0,
+        reif_w: float = 2.0,
         batch_size_acq: int = 500,
         n_z_mc: int = 64,
         jitter_stddev: float = 1e-8,
@@ -39,6 +40,7 @@ class AcquisitionStrategy:
         self.strategy = acquisition_strategy.lower().strip()
         self.pareto_metrics = pareto_metrics
         self.eff_constant = float(eff_constant)
+        self.reif_w = float(reif_w)
 
         if self.strategy == "moo":
             if moo_method not in ("knee", "compromise", "reliability", "linear_decay"):
@@ -329,7 +331,7 @@ class AcquisitionStrategy:
         std_prediction: np.ndarray,
         n_samples: int,
         skip_indices: Optional[List[int]] = None,
-        w: float = 2.0,  # as suggested in the paper
+        w: Optional[float] = None,
     ) -> List[int]:
         """
         REIF selector (maximize): REIF = w*σ - E[|ĝ|],
@@ -338,6 +340,8 @@ class AcquisitionStrategy:
         """
         mu = np.asarray(mean_prediction, dtype=np.float64).squeeze()
         sig = np.asarray(std_prediction, dtype=np.float64).squeeze()
+        if w is None:
+            w = self.reif_w
         # compute beta = mu/sig
         beta_np = (mu / sig)
         Phi_beta = norm.cdf(beta_np)
@@ -362,7 +366,7 @@ class AcquisitionStrategy:
         input_candidates: np.ndarray,   # f_X(x) evaluated at each candidate (same shape as mu)
         n_samples: int,
         skip_indices: Optional[List[int]] = None,
-        w: float = 2.0,
+        w: Optional[float] = None,
     ) -> List[int]:
         """
         REIF2 selector (maximize): REIF2 = REIF * f_X(x).
@@ -372,6 +376,8 @@ class AcquisitionStrategy:
         mu = np.asarray(mean_prediction, dtype=np.float64).squeeze()
         sig = np.asarray(std_prediction, dtype=np.float64).squeeze()
         fx = self.std_normal_pdf_product(input_candidates)
+        if w is None:
+            w = self.reif_w
         # compute beta = mu/sig
         beta_np = (mu / sig)
         Phi_beta = norm.cdf(beta_np)
