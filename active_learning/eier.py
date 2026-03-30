@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+import os
 from typing import NamedTuple, Optional
 
 import numpy as np
@@ -185,7 +186,103 @@ def _stable_cholesky(cov: np.ndarray) -> np.ndarray:
     raise np.linalg.LinAlgError("Failed Cholesky on inducing posterior covariance.")
 
 
-def estimate_pf_posterior_samples(
+def _summarize_pf_samples(pf_samples: np.ndarray):
+    pf_samples = np.asarray(pf_samples, dtype=PRED_DTYPE).reshape(-1)
+    pf_mean = float(np.mean(pf_samples))
+    pf_std = float(np.std(pf_samples, ddof=1)) if pf_samples.size > 1 else 0.0
+    pf_cov = float(pf_std / max(pf_mean, 1e-16))
+    ci95 = (float(np.quantile(pf_samples, 0.025)), float(np.quantile(pf_samples, 0.975)))
+    return pf_samples, pf_mean, pf_cov, ci95
+
+
+def _iter_support_chunks(rng: np.random.RandomState, total_rows: int, input_dim: int, chunk_rows: int):
+    remaining = int(total_rows)
+    while remaining > 0:
+        current = min(int(chunk_rows), remaining)
+        yield rng.normal(size=(current, int(input_dim))).astype(PRED_DTYPE)
+        remaining -= current
+
+
+def _collect_streamed_support_points(
+    base_state,
+    total_rows: int,
+    input_dim: int,
+    chunk_rows: int,
+    selected_indices: np.ndarray,
+):
+    selected_indices = np.asarray(selected_indices, dtype=np.int64).reshape(-1)
+    if selected_indices.size == 0:
+        return np.zeros((0, int(input_dim)), dtype=PRED_DTYPE)
+    sorted_order = np.argsort(selected_indices, kind='mergesort')
+    sorted_indices = selected_indices[sorted_order]
+    inverse_order = np.empty_like(sorted_order)
+    inverse_order[sorted_order] = np.arange(sorted_order.size)
+
+    support_rng = np.random.RandomState()
+    support_rng.set_state(base_state)
+
+    X_selected_sorted = np.empty((selected_indices.size, int(input_dim)), dtype=PRED_DTYPE)
+    global_start = 0
+    filled = 0
+    while global_start < int(total_rows):
+        X_chunk = next(_iter_support_chunks(support_rng, int(total_rows) - global_start, int(input_dim), int(chunk_rows)))
+        current = int(X_chunk.shape[0])
+        global_end = global_start + current
+
+        left = np.searchsorted(sorted_indices, global_start, side='left')
+        right = np.searchsorted(sorted_indices, global_end, side='left')
+        if right > left:
+            local_idx = sorted_indices[left:right] - global_start
+            X_selected_sorted[left:right] = X_chunk[local_idx]
+            filled += int(right - left)
+
+        global_start = global_end
+
+    if filled != int(selected_indices.size):
+        raise RuntimeError('Failed to recover all inducing points from the streamed support.')
+    return X_selected_sorted[inverse_order]
+
+
+def _streamed_trajectory_block_size(total_trajectories: int, chunk_rows: int) -> int:
+    # Keep each dense g(x) block around a few hundred MiB so BLAS sees a
+    # worthwhile matrix multiply without overcommitting memory.
+    target_bytes = 512 * 1024 * 1024
+    bytes_per_value = np.dtype(PRED_DTYPE).itemsize
+    max_block = max(1, target_bytes // max(int(chunk_rows), 1) // bytes_per_value)
+    return int(max(1, min(int(total_trajectories), max_block)))
+
+
+def _streamed_trajectory_parallel_config(
+    total_trajectories: int,
+    chunk_rows: int,
+    requested_workers: Optional[int] = None,
+):
+    max_block = _streamed_trajectory_block_size(total_trajectories, chunk_rows)
+    cpu_count = max(1, int(os.cpu_count() or 1))
+    if requested_workers is None:
+        worker_cap = min(4, max(1, cpu_count // 2))
+    else:
+        worker_cap = min(max(1, int(requested_workers)), cpu_count)
+    if total_trajectories <= 64 or worker_cap <= 1:
+        return max_block, 1
+
+    preferred_block = min(max_block, 64)
+    if preferred_block >= total_trajectories:
+        preferred_block = max(1, min(max_block, int(np.ceil(total_trajectories / worker_cap))))
+    worker_count = min(worker_cap, max(1, int(np.ceil(total_trajectories / preferred_block))))
+    return int(preferred_block), int(worker_count)
+
+
+def _count_pf_failures_for_trajectory_block(
+    mu_chunk: np.ndarray,
+    cov_chunk_ind: np.ndarray,
+    alpha_block: np.ndarray,
+):
+    g_draws = mu_chunk + cov_chunk_ind.dot(alpha_block)
+    return np.count_nonzero(g_draws < 0.0, axis=0)
+
+
+def _estimate_pf_posterior_samples_dense(
     cache: GPCache,
     N_g: int,
     batch_size_acq: int,
@@ -198,11 +295,8 @@ def estimate_pf_posterior_samples(
     N_g = int(N_g)
     x_chunk = int(batch_size_acq)
     if N <= 0 or N_g <= 0:
-        raise ValueError("`n_pool_pf` and `N_g` must be positive.")
+        raise ValueError('`n_pool_pf` and `N_g` must be positive.')
 
-    # For reporting only: draw correlated GP trajectories on a fixed support
-    # and convert each trajectory into one Pf estimate.
-    # Keep the trajectory approximation independent of acquisition batching.
     M = min(N_g, N)
     idx_ind = rng.choice(N, size=M, replace=False)
     X_ind = X_pool_fixed[idx_ind]
@@ -220,7 +314,6 @@ def estimate_pf_posterior_samples(
 
     C_II = _posterior_cov_cross(cache, X_ind, X_ind)
     L_II = _stable_cholesky(C_II)
-
     B = np.linalg.solve(L_II, C_SI.T).T
 
     pf_samples = np.zeros((N_g,), dtype=PRED_DTYPE)
@@ -231,12 +324,171 @@ def estimate_pf_posterior_samples(
         g_draws = mu_pool[:, None] + B.dot(eps)
         pf_samples[g0:g1] = np.mean(g_draws < 0.0, axis=0)
 
-    pf_mean = float(np.mean(pf_samples))
-    pf_std = float(np.std(pf_samples, ddof=1)) if N_g > 1 else 0.0
-    pf_cov = float(pf_std / max(pf_mean, 1e-16))
-    ci95 = (float(np.quantile(pf_samples, 0.025)), float(np.quantile(pf_samples, 0.975)))
-    return pf_samples, pf_mean, pf_cov, ci95
+    return _summarize_pf_samples(pf_samples)
 
+
+def estimate_pf_posterior_samples_streamed(
+    cache: GPCache,
+    N_g: int,
+    batch_size_acq: int,
+    rng: np.random.RandomState,
+    n_pool_pf: int,
+    input_dim: int,
+    posterior_workers: Optional[int] = None,
+    verbose: bool = False,
+):
+    N = int(n_pool_pf)
+    N_g = int(N_g)
+    x_chunk = int(batch_size_acq)
+    input_dim = int(input_dim)
+    if N <= 0 or N_g <= 0:
+        raise ValueError('`n_pool_pf` and `N_g` must be positive.')
+    if x_chunk <= 0:
+        raise ValueError('`batch_size_acq` must be positive.')
+
+    M = min(N_g, N)
+    base_state = rng.get_state()
+
+    # First pass on the caller RNG preserves the same support->choice->epsilon order
+    # as the dense implementation without materializing the full support.
+    for _ in _iter_support_chunks(rng, N, input_dim, x_chunk):
+        pass
+    idx_ind = rng.choice(N, size=M, replace=False)
+    eps_all = rng.normal(size=(M, N_g)).astype(PRED_DTYPE)
+
+    X_ind = _collect_streamed_support_points(
+        base_state=base_state,
+        total_rows=N,
+        input_dim=input_dim,
+        chunk_rows=x_chunk,
+        selected_indices=idx_ind,
+    )
+    X_ind_scaled, X_ind_sqnorm = _scale_inputs(X_ind, cache.lengthscale)
+    K_ind_train = _matern52_cross_scaled(
+        X_ind_scaled,
+        X_ind_sqnorm,
+        cache.X_train_scaled,
+        cache.X_train_sqnorm,
+        cache.kern_var,
+    )
+    proj_ind = _solve_against_train_cholesky(cache, K_ind_train)
+    C_II_norm = _matern52_cross_scaled(
+        X_ind_scaled,
+        X_ind_sqnorm,
+        X_ind_scaled,
+        X_ind_sqnorm,
+        cache.kern_var,
+    ) - proj_ind.T.dot(proj_ind)
+    y_scale = np.asarray(cache.y_std, dtype=PRED_DTYPE)
+    y_scale_sq = np.asarray(cache.y_std ** 2, dtype=PRED_DTYPE)
+    C_II = (y_scale_sq * C_II_norm).astype(PRED_DTYPE)
+    L_II = _stable_cholesky(C_II)
+    alpha_all = np.linalg.solve(L_II.T, eps_all)
+
+    pf_counts = np.zeros((N_g,), dtype=np.int64)
+    support_rng = np.random.RandomState()
+    support_rng.set_state(base_state)
+    total_chunks = max(1, (N + x_chunk - 1) // x_chunk)
+    progress_every = max(1, total_chunks // 10)
+    g_chunk, g_workers = _streamed_trajectory_parallel_config(
+        N_g,
+        x_chunk,
+        requested_workers=posterior_workers,
+    )
+    g_ranges = [(g0, min(N_g, g0 + g_chunk)) for g0 in range(0, N_g, g_chunk)]
+    limit_ctx = (
+        threadpool_limits(limits=1, user_api="blas")
+        if g_workers > 1 and threadpool_limits is not None
+        else nullcontext()
+    )
+
+    with limit_ctx:
+        executor_ctx = ThreadPoolExecutor(max_workers=g_workers) if g_workers > 1 else nullcontext()
+        with executor_ctx as executor:
+            for chunk_idx, X_chunk in enumerate(_iter_support_chunks(support_rng, N, input_dim, x_chunk), start=1):
+                X_chunk_scaled, X_chunk_sqnorm = _scale_inputs(X_chunk, cache.lengthscale)
+                K_chunk_train = _matern52_cross_scaled(
+                    X_chunk_scaled,
+                    X_chunk_sqnorm,
+                    cache.X_train_scaled,
+                    cache.X_train_sqnorm,
+                    cache.kern_var,
+                )
+                mu_chunk = cache.y_mean + y_scale * K_chunk_train.dot(cache.alpha)
+                proj_chunk = _solve_against_train_cholesky(cache, K_chunk_train)
+                K_chunk_ind = _matern52_cross_scaled(
+                    X_chunk_scaled,
+                    X_chunk_sqnorm,
+                    X_ind_scaled,
+                    X_ind_sqnorm,
+                    cache.kern_var,
+                )
+                C_chunk_ind = (y_scale_sq * (K_chunk_ind - proj_chunk.T.dot(proj_ind))).astype(PRED_DTYPE)
+
+                if executor is not None and len(g_ranges) > 1:
+                    futures = [
+                        executor.submit(
+                            _count_pf_failures_for_trajectory_block,
+                            mu_chunk,
+                            C_chunk_ind,
+                            alpha_all[:, g0:g1],
+                        )
+                        for g0, g1 in g_ranges
+                    ]
+                    for (g0, g1), future in zip(g_ranges, futures):
+                        pf_counts[g0:g1] += future.result()
+                else:
+                    for g0, g1 in g_ranges:
+                        pf_counts[g0:g1] += _count_pf_failures_for_trajectory_block(
+                            mu_chunk=mu_chunk,
+                            cov_chunk_ind=C_chunk_ind,
+                            alpha_block=alpha_all[:, g0:g1],
+                        )
+
+                if verbose and (chunk_idx == 1 or chunk_idx == total_chunks or chunk_idx % progress_every == 0):
+                    done_rows = min(chunk_idx * x_chunk, N)
+                    print(
+                        f"[posterior][streamed] chunk {chunk_idx:>4d}/{total_chunks} | "
+                        f"processed_rows={done_rows} | inducing={M} | trajectories={N_g} | "
+                        f"traj_block={g_chunk} | traj_workers={g_workers}"
+                    )
+
+    pf_samples = pf_counts.astype(PRED_DTYPE) / float(N)
+    return _summarize_pf_samples(pf_samples)
+
+
+def estimate_pf_posterior_samples(
+    cache: GPCache,
+    N_g: int,
+    batch_size_acq: int,
+    rng: np.random.RandomState,
+    n_pool_pf: int,
+    input_dim: int,
+    method: str = 'dense',
+    posterior_workers: Optional[int] = None,
+    verbose: bool = False,
+):
+    if method == 'dense':
+        return _estimate_pf_posterior_samples_dense(
+            cache=cache,
+            N_g=N_g,
+            batch_size_acq=batch_size_acq,
+            rng=rng,
+            n_pool_pf=n_pool_pf,
+            input_dim=input_dim,
+        )
+    if method == 'streamed':
+        return estimate_pf_posterior_samples_streamed(
+            cache=cache,
+            N_g=N_g,
+            batch_size_acq=batch_size_acq,
+            rng=rng,
+            n_pool_pf=n_pool_pf,
+            input_dim=input_dim,
+            posterior_workers=posterior_workers,
+            verbose=verbose,
+        )
+    raise ValueError(f'Unknown posterior estimator method: {method}')
 
 def build_int_cache_numpy(cache: GPCache, X_int: np.ndarray) -> IntCache:
     # Precompute the current posterior quantities on one integration batch of
