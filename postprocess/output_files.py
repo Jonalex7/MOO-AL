@@ -1,10 +1,11 @@
+import argparse
 import json
 import pickle
 import numpy as np
 
 from settings import (
+    REPO_ROOT,
     BASE_RESULTS_DIR,
-    AGGREGATED_DIR,
     CASE_STUDIES,
     DEFAULT_STRATEGIES,
     GROUP_2D,
@@ -25,6 +26,34 @@ SAVE_OUTPUT_RESULTS_DICT = False
 
 # If True, store Pf_model trajectory inside relative_error_dict entries.
 INCLUDE_PF_MODEL_IN_RELATIVE = False
+
+try:
+    DEFAULT_RESULTS_FOLDER = str(BASE_RESULTS_DIR.relative_to(REPO_ROOT))
+except ValueError:
+    DEFAULT_RESULTS_FOLDER = str(BASE_RESULTS_DIR)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Aggregate experiment outputs into postprocess dictionaries."
+    )
+    parser.add_argument(
+        "--results-folder",
+        "--results_folder",
+        dest="results_folder",
+        default=DEFAULT_RESULTS_FOLDER,
+        help=(
+            "Folder under the repository root containing case-study results "
+            f"(default: {DEFAULT_RESULTS_FOLDER})."
+        ),
+    )
+    return parser.parse_args()
+
+
+def resolve_results_dirs(results_folder):
+    base_results_dir = REPO_ROOT / results_folder
+    aggregated_dir = base_results_dir / "_aggregated"
+    return base_results_dir, aggregated_dir
 
 
 def build_relative_entry(output_data, pf_ref):
@@ -52,7 +81,7 @@ def build_relative_entry(output_data, pf_ref):
     return entry
 
 
-def build_metadata(pf_ref_by_case):
+def build_metadata(pf_ref_by_case, base_results_dir):
     return {
         "case_studies": CASE_STUDIES,
         "group_2d": GROUP_2D,
@@ -65,17 +94,20 @@ def build_metadata(pf_ref_by_case):
         "doe_samples": DOE_SAMPLES,
         "max_len_by_case": MAX_LEN_BY_CASE,
         "pf_reference_by_case": pf_ref_by_case,
+        "base_results_dir": str(base_results_dir),
         "save_output_results_dict": SAVE_OUTPUT_RESULTS_DICT,
         "include_pf_model_in_relative": INCLUDE_PF_MODEL_IN_RELATIVE,
     }
 
 
-def main():
-    if not BASE_RESULTS_DIR.is_dir():
-        raise FileNotFoundError(f"Results directory not found: {BASE_RESULTS_DIR}")
+def main(results_folder):
+    base_results_dir, aggregated_dir = resolve_results_dirs(results_folder)
 
-    print(f"[start] BASE_RESULTS_DIR = {BASE_RESULTS_DIR}")
-    print(f"[start] AGGREGATED_DIR   = {AGGREGATED_DIR}")
+    if not base_results_dir.is_dir():
+        raise FileNotFoundError(f"Results directory not found: {base_results_dir}")
+
+    print(f"[start] BASE_RESULTS_DIR = {base_results_dir}")
+    print(f"[start] AGGREGATED_DIR   = {aggregated_dir}")
     print(f"[start] CASE_STUDIES     = {CASE_STUDIES}")
     print(f"[start] STRATEGIES       = {DEFAULT_STRATEGIES}")
     print(f"[start] SAVE_OUTPUT_RESULTS_DICT = {SAVE_OUTPUT_RESULTS_DICT}")
@@ -95,7 +127,7 @@ def main():
     runs_relative_loaded = 0
 
     for case in CASE_STUDIES:
-        case_dir = BASE_RESULTS_DIR / case
+        case_dir = base_results_dir / case
         if not case_dir.is_dir():
             print(f"No directory found for case: {case}")
             continue
@@ -194,23 +226,23 @@ def main():
 
         print("")
 
-    AGGREGATED_DIR.mkdir(parents=True, exist_ok=True)
+    aggregated_dir.mkdir(parents=True, exist_ok=True)
 
     if SAVE_OUTPUT_RESULTS_DICT:
-        with open(AGGREGATED_DIR / "output_results_dict.pkl", "wb") as f_id:
+        with open(aggregated_dir / "output_results_dict.pkl", "wb") as f_id:
             pickle.dump(output_results_dict, f_id)
 
-    with open(AGGREGATED_DIR / "config_results_dict.pkl", "wb") as f_id:
+    with open(aggregated_dir / "config_results_dict.pkl", "wb") as f_id:
         pickle.dump(config_results_dict, f_id)
-    with open(AGGREGATED_DIR / "relative_error_dict.pkl", "wb") as f_id:
+    with open(aggregated_dir / "relative_error_dict.pkl", "wb") as f_id:
         pickle.dump(relative_error_dict, f_id)
 
-    with open(AGGREGATED_DIR / "pf_reference_by_case.json", "w", encoding="utf-8") as f_id:
+    with open(aggregated_dir / "pf_reference_by_case.json", "w", encoding="utf-8") as f_id:
         json.dump(pf_ref_by_case, f_id, indent=2)
-    with open(AGGREGATED_DIR / "missing_files.json", "w", encoding="utf-8") as f_id:
+    with open(aggregated_dir / "missing_files.json", "w", encoding="utf-8") as f_id:
         json.dump(missing_files, f_id, indent=2)
-    with open(AGGREGATED_DIR / "metadata.json", "w", encoding="utf-8") as f_id:
-        json.dump(build_metadata(pf_ref_by_case), f_id, indent=2)
+    with open(aggregated_dir / "metadata.json", "w", encoding="utf-8") as f_id:
+        json.dump(build_metadata(pf_ref_by_case, base_results_dir), f_id, indent=2)
 
     n_cases = len(config_results_dict)
     n_method_groups = sum(len(v) for v in config_results_dict.values())
@@ -231,8 +263,9 @@ def main():
     print(f"  runs counted in config dict     : {n_runs_cfg}")
     print(f"  runs counted in relative dict   : {n_runs_rel}")
     print(f"  missing file records            : {len(missing_files)}")
-    print(f"[save] dictionaries written to: {AGGREGATED_DIR}")
+    print(f"[save] dictionaries written to: {aggregated_dir}")
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(args.results_folder)

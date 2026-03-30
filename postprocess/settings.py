@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BASE_RESULTS_DIR = REPO_ROOT / "notebooks" / "results_tracking"
+BASE_RESULTS_DIR = REPO_ROOT / "results"
 AGGREGATED_DIR = BASE_RESULTS_DIR / "_aggregated"
 FIGURES_DIR = BASE_RESULTS_DIR / "_figures"
 
@@ -76,7 +76,7 @@ STRATEGY_COLORS = {
     "moo_knee": "#ff7f0e",
     "moo_compromise": "#2ca02c",
     "moo_eps_ew": "#8c564b",
-    "eier": "#111111",
+    "eier": "#1f5f6b",
     "eff": "#d62728",
     "u": "#9467bd",
     "erf": "#17becf",
@@ -88,6 +88,29 @@ STRATEGY_COLORS = {
 
 DOE_SAMPLES = 10
 MAX_LEN_BY_CASE = {case: (202 if case in GROUP_2D else 502) for case in CASE_STUDIES}
+
+# Threshold-detection defaults shared by the sample-efficiency and posterior-CoV
+# postprocess steps.
+CAPTURED_LS = 5
+THRESHOLD_FACTOR = 1.0
+REQUIRED_CONSECUTIVE = 3
+EIER_REFERENCE_STRATEGY = "eier"
+
+# Posterior-estimation defaults used when old runs do not store these values in
+# config.json or output.json.
+DEFAULT_POST_N_G_PF = 1000
+DEFAULT_POST_N_PF_POST_POOL = 10000000
+DEFAULT_POST_PF_POST_BATCH_SIZE = 500
+DEFAULT_POST_PREDICT_BATCH_SIZE = 10000
+DEFAULT_POST_PREDICT_N_JOBS = -1
+
+# Aggregated artifacts produced by the figures and posterior-CoV campaigns.
+THRESHOLD_DICT_NAME = "thresholds_by_case.json"
+THRESHOLD_HITS_TABLE_NAME = "threshold_hits_per_seed.tsv"
+STRATEGY_RANKINGS_TABLE_NAME = "strategy_rankings_by_case.tsv"
+PF_POST_COV_TABLE_NAME = "pf_post_cov_at_threshold_per_seed.tsv"
+PF_POST_COV_SUMMARY_NAME = "pf_post_cov_at_threshold_summary.txt"
+PF_POST_SAMPLES_DIRNAME = "pf_post_samples"
 
 
 def strategy_to_dir(strategy: str) -> str:
