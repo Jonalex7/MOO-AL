@@ -46,6 +46,7 @@ def main(config, name_exp):
     seed_exp = config['seed'] # seed for experiment
     save_interval = config['save_interval']  # interval to save model
     save_model_gp = bool(config.get("save_model_gp", config.get("model_gp", False)))
+    eff_constant = float(config.get("eff_constant", 2.0))
     config["save_model_gp"] = save_model_gp
     # Drop legacy key to keep saved config.json consistent.
     if "model_gp" in config:
@@ -120,6 +121,8 @@ def main(config, name_exp):
     config['pf_post_batch_size'] = pf_post_batch_size
     config['predict_batch_size'] = predict_batch_size
     config['predict_n_jobs'] = predict_n_jobs
+    if al_strategy in {"eff", "portfolio"}:
+        config['eff_constant'] = eff_constant
     if al_strategy == "eier":
         config['n_mcs_eier_int'] = n_mcs_eier_int
         config['eier_num_workers'] = eier_num_workers
@@ -140,6 +143,8 @@ def main(config, name_exp):
     'acquisition_strategy': al_strategy,
     'pareto_metrics': config['pareto_metrics'],  # If True, compute pareto front
     }
+    if al_strategy in {"eff", "portfolio"}:
+        args_al['eff_constant'] = eff_constant
     # If moo strategy, add moo_method
     if al_strategy == 'moo':
         args_al['moo_method'] = config['moo_method']    # 'knee', 'compromise', 'reliability', 'linear_decay'

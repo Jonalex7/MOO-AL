@@ -26,6 +26,7 @@ class AcquisitionStrategy:
         eps_T: int = 100,           # number of calls to decay over
         portfolio_lambda: float = 2.0,   # Hedge balance (lambda)
         portfolio_delta: float = 0.7,    # Memory factor (delta)
+        eff_constant: float = 2.0,
         batch_size_acq: int = 500,
         n_z_mc: int = 64,
         jitter_stddev: float = 1e-8,
@@ -37,6 +38,7 @@ class AcquisitionStrategy:
     ):
         self.strategy = acquisition_strategy.lower().strip()
         self.pareto_metrics = pareto_metrics
+        self.eff_constant = float(eff_constant)
 
         if self.strategy == "moo":
             if moo_method not in ("knee", "compromise", "reliability", "linear_decay"):
@@ -98,7 +100,7 @@ class AcquisitionStrategy:
         z_seed: Optional[int] = None,
         n_samples: int = 1,
         skip_indices: Optional[List[int]] = None,
-        constant: float = 2.0,
+        constant: Optional[float] = None,
         pf_estimate: Optional[float] = None
     ) -> List[int]:
 
@@ -259,10 +261,12 @@ class AcquisitionStrategy:
         std_prediction: np.ndarray,
         n_samples: int, # Number of samples to select
         skip_indices: Optional[List[int]], # Indices to skip in the pool
-        constant: float = 2.0
+        constant: Optional[float] = None
     ) -> List[int]:
         mean_prediction = np.asarray(mean_prediction, dtype=np.float64).squeeze()
         std_prediction = np.asarray(std_prediction, dtype=np.float64).squeeze()
+        if constant is None:
+            constant = self.eff_constant
         eps = constant * std_prediction
         eff = (
             mean_prediction
@@ -334,7 +338,6 @@ class AcquisitionStrategy:
         """
         mu = np.asarray(mean_prediction, dtype=np.float64).squeeze()
         sig = np.asarray(std_prediction, dtype=np.float64).squeeze()
-
         # compute beta = mu/sig
         beta_np = (mu / sig)
         Phi_beta = norm.cdf(beta_np)
@@ -369,7 +372,6 @@ class AcquisitionStrategy:
         mu = np.asarray(mean_prediction, dtype=np.float64).squeeze()
         sig = np.asarray(std_prediction, dtype=np.float64).squeeze()
         fx = self.std_normal_pdf_product(input_candidates)
-
         # compute beta = mu/sig
         beta_np = (mu / sig)
         Phi_beta = norm.cdf(beta_np)

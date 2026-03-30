@@ -7,6 +7,9 @@ passive_samples: 10     # initial DoE with LHS
 n_mcs_pool: 1000000  # size of MonteCarlo pool candidates
 seed: null # null for random seed (default)
 
+# --- EFF parameter ---
+eff_constant: 2.0  # epsilon multiplier used in EFF: eps = eff_constant * sigma
+
 # --- reliability estimation---
 n_mcs_pf: 10000000 # size of MonteCarlo sampling for pf estimation
 
