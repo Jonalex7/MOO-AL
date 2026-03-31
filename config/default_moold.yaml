@@ -1,9 +1,12 @@
 # --- active training options ---
 case_study: 'four_branch_6' # Specify target LS: four_branch_6, himmelblau,hat, damped_oscillator
-al_strategy: 'moo'    #eff, u, moo
-moo_method: 'knee' #knee, compromise, reliability
+al_strategy: 'moo'    #eff, u, moo, erf, reif
+moo_method: 'linear_decay' #knee, compromise, reliability, linear_decay
+eps_start: 1.0     # if ==1.0; start fully exploratory
+eps_end: 0.0       # if ==0.0; end fully exploitative
+eps_T: 50             # number of iterations to decay over
 al_batch: 1   # batch sample size per active iteration
-total_samples: 200   # max number of acquired samples
+total_samples: 20   # max number of acquired samples
 passive_samples: 10     # initial DoE with LHS
 n_mcs_pool: 1000000  # size of MonteCarlo pool candidates
 seed: null # null for random seed (default)

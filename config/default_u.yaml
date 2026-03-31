@@ -5,11 +5,15 @@ al_batch: 1   # batch sample size per active iteration
 total_samples: 20   # max number of samples
 passive_samples: 10     # initial DoE with LHS
 n_mcs_pool: 1000000  # size of MonteCarlo pool candidates
-seed: null # null for random seed (default)
+seed: 28 # null for random seed (default)
 
 # --- reliability estimation---
 n_mcs_pf: 10000000 # size of MonteCarlo sampling for pf estimation
 
 #--- output model----
 save_interval: 10 # Save model every n iterations
+save_model_gp: False # If True, save pickled GP checkpoints
 pareto_metrics: True # If True, compute pareto 
+
+# wandb logging
+wandb_online: False

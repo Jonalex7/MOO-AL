@@ -1,5 +1,5 @@
 #!/bin/bash
-# Submission script for nic5
+# Submission script for Lyra
 #
 #SBATCH --job-name=ALMO2D
 #SBATCH --time=40:00:00 # hh:mm:ss
@@ -11,13 +11,22 @@
 #SBATCH --mail-user=jmoran@uliege.be
 #SBATCH --mail-type=ALL
 
-module load Python/3.9.6-GCCcore-11.2.0
+source ~/miniconda3/bin/activate
+conda activate py39_base
 source env/bin/activate
 
+CPU_LIMIT=${SLURM_CPUS_PER_TASK:-1}
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
 # Define arrays for the arguments
-CASE_STUDY_OPTIONS=("four_branch_6" "four_branch_7" "himmelblau" "hat")
-AL_STRATEGY_OPTIONS=("u" "eff" "mo")
+# CASE_STUDY_OPTIONS=("four_branch_6" "four_branch_7" "himmelblau" "hat" "nonlinear_oscillator" "high_dimensional" "2dof_oscillator")
+CASE_STUDY_OPTIONS=("nonlinear_oscillator" "high_dimensional" "2dof_oscillator")
+AL_STRATEGY_OPTIONS=("moo")
 REPEATS=15  # Number of repetitions for each experiment setting
+# OUTPUT_PREFIX="N_it1" # Prefix for output naming
 
 # Calculate the number of options
 NUM_CASE_STUDY=${#CASE_STUDY_OPTIONS[@]}
@@ -45,6 +54,12 @@ AL_STRATEGY=${AL_STRATEGY_OPTIONS[$idx_al_strategy]}
 OUTPUT_NUMBER=$((repeat_num + 1))
 
 echo "Running with --case_study=$CASE_STUDY --al_strategy=$AL_STRATEGY --output=$OUTPUT_NUMBER"
-wandb offline
 # Run the Python script with the selected arguments
-python main.py --case_study "$CASE_STUDY" --al_strategy "$AL_STRATEGY" --output "$OUTPUT_NUMBER"
+
+# OUTPUT_NAME="${OUTPUT_PREFIX}_${OUTPUT_NUMBER}"
+python main.py \
+    --config default_moor \
+    --case_study "$CASE_STUDY" \
+    --al_strategy "$AL_STRATEGY" \
+    --cpu_workers "$CPU_LIMIT" \
+    --output "$OUTPUT_NUMBER"

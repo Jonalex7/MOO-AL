@@ -10,6 +10,7 @@ results/
 
 # Python
 *__pycache__/
+env/
 
 # Mac
 .DS_Store

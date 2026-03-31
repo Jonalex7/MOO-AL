@@ -1,0 +1,36 @@
+# --- active training options ---
+case_study: 'four_branch_6' # Specify target LS: four_branch_6, himmelblau, hat, wei_g2, ...
+al_strategy: 'eier'    # eff, u, moo, erf, reif, eier
+al_batch: 1   # EIER currently selects one sample per active iteration
+total_samples: 20   # max number of samples
+passive_samples: 10     # initial DoE with LHS
+n_mcs_pool: 1_000_000  # candidate population drawn fresh each iteration (shortlist source)
+seed: 28 # null for random seed (default)
+
+# --- EIER options ---
+n_mcs_eier_int: 10_000  # EIER integration support drawn fresh each iteration for H_n and H_{n+1}
+obs_stddev: 1.0e-8  # physical-space observation jitter used by the look-ahead update
+batch_size_acq: 1000  # integration batch size used to accumulate H_n/H_{n+1}
+local_mis_topk: 500  # number of low-misclassification candidates kept for full EIER evaluation
+n_g_pf: 1_000  # shared sample count: EIER fantasy expectation and posterior-Pf trajectories
+z_chunk_size: 100  # fantasy sample chunk size inside the EIER look-ahead loop
+cpu_workers: 8  # shared CPU worker count for GP predictions and filtered EIER reduction; use -1 for all CPUs
+debug_acq: False  # print EIER debug quantities such as H_n and gain range
+
+# --- prediction helpers ---
+# Not part of the EIER score definition. These only control memory/speed for
+# predictor-based Pf tracking and large GP prediction calls.
+n_pf_post_pool: 10_000  # support size for posterior-trajectory Pf tracking (resampled each iteration; separate from EIER integration support)
+pf_post_batch_size: 500  # chunk size for posterior-trajectory Pf estimation on the fixed support
+predict_batch_size: 5000  # chunk size for standard GP predictions on large pools
+
+# --- reliability estimation---
+n_mcs_pf: 10_000_000 # size of MonteCarlo sampling for pf estimation
+
+#--- output model----
+save_interval: 10
+save_model_gp: False # If True, save pickled GP checkpoints
+pareto_metrics: True # If True, compute pareto metrics in the usual AL postprocessing
+
+# wandb logging
+wandb_online: True

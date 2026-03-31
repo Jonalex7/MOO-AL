@@ -1,56 +1,52 @@
-import torch
+import os
+import re
+from contextlib import nullcontext
+
 import numpy as np
-from scipy.stats import norm, uniform, lognorm
 import scipy.stats as stats
 from scipy.optimize import fmin_l_bfgs_b
 from joblib import Parallel, delayed
 
-def isoprobabilistic_transform(x, source_marginals, target_marginals):
-    if not isinstance(x, torch.Tensor):
-        x = torch.tensor(x, dtype=torch.float32)
+try:
+    from threadpoolctl import threadpool_limits
+except ImportError:  # pragma: no cover
+    threadpool_limits = None
 
-    if len(x.shape) == 1:
-        x = x.unsqueeze(0)
-        
-    transformed_x = torch.empty_like(x)
-    
+def isoprobabilistic_transform(x, source_marginals, target_marginals):
+    # Ensure x is a numpy array
+    x = np.atleast_2d(x).astype(np.float64)
+    transformed_x = np.empty_like(x)
+
     for i, (source_params, target_params) in enumerate(zip(source_marginals.values(), target_marginals.values())):
-        loc_source, scale_source, dist_source = source_params
-        loc_target, scale_target, dist_target = target_params
-        
+        loc_s, scale_s, dist_s_name = source_params
+        loc_t, scale_t, dist_t_name = target_params
+
         # Define source distribution
-        if dist_source == 'lognorm':
-            # Compute mu and sigma for source lognormal distribution
-            mu_source = np.log(loc_source**2 / np.sqrt(loc_source**2 + scale_source**2))
-            sigma_source = np.sqrt(np.log(1 + (scale_source / loc_source)**2))
-            dist_source = stats.lognorm(s=sigma_source, scale=np.exp(mu_source))  # lognorm takes sigma and exp(mu)
-        elif dist_source == 'uniform':
-            dist_source = stats.uniform(loc=loc_source, scale=scale_source)
+        if dist_s_name == 'lognorm':
+            mu_s = np.log(loc_s**2 / np.sqrt(loc_s**2 + scale_s**2))
+            sigma_s = np.sqrt(np.log(1 + (scale_s / loc_s)**2))
+            dist_source = stats.lognorm(s=sigma_s, scale=np.exp(mu_s))
+        elif dist_s_name == 'uniform':
+            dist_source = stats.uniform(loc=loc_s, scale=scale_s)
         else:
-            dist_source = getattr(stats, dist_source)(loc=loc_source, scale=scale_source)
+            dist_source = getattr(stats, dist_s_name)(loc=loc_s, scale=scale_s)
 
         # Define target distribution
-        if dist_target == 'lognorm':
-            # Compute mu and sigma for target lognormal distribution
-            mu_target = np.log(loc_target**2 / np.sqrt(loc_target**2 + scale_target**2))
-            sigma_target = np.sqrt(np.log(1 + (scale_target / loc_target)**2))
-            dist_target = stats.lognorm(s=sigma_target, scale=np.exp(mu_target))
-        elif dist_target == 'uniform':
+        if dist_t_name == 'lognorm':
+            mu_t = np.log(loc_t**2 / np.sqrt(loc_t**2 + scale_t**2))
+            sigma_t = np.sqrt(np.log(1 + (scale_t / loc_t)**2))
+            dist_target = stats.lognorm(s=sigma_t, scale=np.exp(mu_t))
+        elif dist_t_name == 'uniform':
             # Correct the scale for the uniform distribution
-            dist_target = stats.uniform(loc=loc_target, scale=scale_target - loc_target)  # scale is upper bound - lower bound
+            dist_target = stats.uniform(loc=loc_t, scale=scale_t - loc_t)
         else:
-            dist_target = getattr(stats, dist_target)(loc=loc_target, scale=scale_target)
+            dist_target = getattr(stats, dist_t_name)(loc=loc_t, scale=scale_t)
 
-        # Calculate the CDF of source samples
+        # Compute transformation: Target_PPF(Source_CDF(x))
         cdf_source = dist_source.cdf(x[:, i])
-        
-        # Use the inverse CDF (PPF) of the target distribution to get transformed samples
-        transformed_x[:, i] = torch.tensor(dist_target.ppf(cdf_source), dtype=torch.float32)
-    
-    if x.shape[0] == 1:
-        return transformed_x.squeeze()
-    else:
-        return transformed_x
+        transformed_x[:, i] = dist_target.ppf(cdf_source)
+
+    return transformed_x.squeeze() if x.shape[0] == 1 else transformed_x
 
 def custom_optimizer(obj_func, initial_theta, bounds):
     opt_res = fmin_l_bfgs_b(obj_func, initial_theta, bounds=bounds, maxiter=1000)
@@ -60,25 +56,98 @@ def custom_optimizer(obj_func, initial_theta, bounds):
 def predict_batch(model, x_batch):
     return model.predict(x_batch, return_std=True)
 
-# Splitting x_mc_pool into smaller chunks
-def parallel_predict(model_gp, x_mc_pool, n_jobs=-1):
-    batch_size = 10000  # Adjust batch size based on your system memory to avoid overflow
+
+def _parse_positive_int(raw_value):
+    if raw_value is None:
+        return None
+    match = re.search(r"\d+", str(raw_value))
+    if match is None:
+        return None
+    value = int(match.group())
+    return value if value > 0 else None
+
+
+def resolve_cpu_workers(value):
+    value = int(value)
+
+    slurm_cpus_per_task = _parse_positive_int(os.environ.get("SLURM_CPUS_PER_TASK"))
+    try:
+        affinity_count = max(1, len(os.sched_getaffinity(0)))
+    except AttributeError:
+        count = os.cpu_count()
+        affinity_count = 1 if count is None else max(1, int(count))
+
+    available_workers = affinity_count
+    if slurm_cpus_per_task is not None:
+        available_workers = min(available_workers, slurm_cpus_per_task)
+
+    if value == -1:
+        return int(available_workers)
+    if value < 1:
+        raise ValueError("`cpu_workers` must be a positive integer or -1.")
+    if value > available_workers:
+        print(
+            f"[cpu] Requested {value} workers but only {available_workers} are available "
+            "for this task. Capping worker count."
+        )
+    return int(min(value, available_workers))
+
+
+def _resolve_n_jobs(n_jobs, n_batches):
+    n_jobs = int(n_jobs)
+    if n_jobs == -1:
+        try:
+            affinity_count = len(os.sched_getaffinity(0))
+        except AttributeError:
+            affinity_count = os.cpu_count() or 1
+        n_jobs = max(1, int(affinity_count))
+    elif n_jobs < 1:
+        raise ValueError("`n_jobs` must be a positive integer or -1.")
+
+    slurm_cpus_per_task = _parse_positive_int(os.environ.get("SLURM_CPUS_PER_TASK"))
+    if slurm_cpus_per_task is not None:
+        n_jobs = min(n_jobs, slurm_cpus_per_task)
+
+    return max(1, min(int(n_jobs), int(n_batches)))
+
+
+def parallel_predict(model_gp, x_mc_pool, n_jobs=-1, batch_size=10000, prefer="threads"):
+    x_mc_pool = np.asarray(x_mc_pool, dtype=np.float64)
+    batch_size = max(1, int(batch_size))
     n_batches = int(np.ceil(x_mc_pool.shape[0] / batch_size))
-    
+    n_jobs = _resolve_n_jobs(n_jobs, n_batches)
+
     # Split into batches
     batches = [x_mc_pool[i * batch_size: (i + 1) * batch_size] for i in range(n_batches)]
-    
-    # Parallel predictions using joblib
-    results = Parallel(n_jobs=n_jobs)(delayed(predict_batch)(model_gp, batch) for batch in batches)
+
+    if n_batches == 1 or int(n_jobs) == 1:
+        results = [predict_batch(model_gp, batch) for batch in batches]
+    else:
+        limit_ctx = threadpool_limits(limits=1, user_api="blas") if threadpool_limits is not None else nullcontext()
+        try:
+            with limit_ctx:
+                results = Parallel(n_jobs=n_jobs, prefer=prefer)(
+                    delayed(predict_batch)(model_gp, batch) for batch in batches
+                )
+        except RuntimeError as exc:
+            if "can't start new thread" not in str(exc).lower():
+                raise
+            print(
+                f"[parallel_predict] Thread creation failed with n_jobs={n_jobs}; "
+                "falling back to sequential execution for this call."
+            )
+            results = [predict_batch(model_gp, batch) for batch in batches]
 
     # Combining results
     means, stds = zip(*results)
-    mean_prediction = np.concatenate(means, axis=0)
-    std_prediction = np.concatenate(stds, axis=0)
+    mean_prediction = np.concatenate(means, axis=0).astype(np.float64, copy=False)
+    std_prediction = np.concatenate(stds, axis=0).astype(np.float64, copy=False)
+    return mean_prediction, std_prediction
 
-    return torch.tensor(mean_prediction), torch.tensor(std_prediction)
-
-def normalize_tensor(tensor):
-    min_vals = tensor.min(dim=0, keepdim=True).values
-    max_vals = tensor.max(dim=0, keepdim=True).values
-    return (tensor - min_vals) / (max_vals - min_vals)
+def normalize_array(arr):
+    arr = np.asarray(arr, dtype=np.float64)
+    min_vals = np.min(arr, axis=0, keepdims=True)
+    max_vals = np.max(arr, axis=0, keepdims=True)
+    denom = np.where(max_vals > min_vals, max_vals - min_vals, 1.0)
+    normalized = (arr - min_vals) / denom
+    return normalized.squeeze() if arr.ndim == 1 else normalized
